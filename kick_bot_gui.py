@@ -16,17 +16,18 @@ from curl_cffi import requests as cf_requests
 import websocket
 
 # ── Kick API konstanty ───────────────────────────────────────────────────────
-KICK_AUTH_URL  = "https://id.kick.com/oauth/authorize"
-KICK_TOKEN_URL = "https://id.kick.com/oauth/token"
-KICK_API_URL   = "https://api.kick.com/public/v1"
-KICK_SCOPES    = "user:read channel:read chat:write"
-PUSHER_WS      = ("wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
-                  "?protocol=7&client=js&version=8.4.0-rc2&flash=false")
-REDIRECT_URI   = "http://localhost:7878/callback"
-TOKEN_FILE     = Path("kick_tokens.json")
-CONFIG_FILE    = Path("kick_config.json")
+KICK_AUTH_URL   = "https://id.kick.com/oauth/authorize"
+KICK_TOKEN_URL  = "https://id.kick.com/oauth/token"
+KICK_API_URL    = "https://api.kick.com/public/v1"
+KICK_SCOPES     = "user:read channel:read chat:write"
+PUSHER_WS       = ("wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
+                   "?protocol=7&client=js&version=8.4.0-rc2&flash=false")
+REDIRECT_URI    = "http://localhost:7878/callback"
+TOKEN_FILE      = Path("kick_tokens.json")
+CONFIG_FILE     = Path("kick_config.json")
+BOT_CONFIG_FILE = Path("bot_config.json")
 
-# ── Barvy / témata ───────────────────────────────────────────────────────────
+# ── Barvy ────────────────────────────────────────────────────────────────────
 KICK_GREEN  = "#53FC18"
 DARK_BG     = "#0d0d0d"
 PANEL_BG    = "#141414"
@@ -43,26 +44,142 @@ ctk.set_default_color_theme("green")
 
 
 # ════════════════════════════════════════════════════════════════════════════
-#  Logika bota (stejná jako CLI verze, bez print výstupů)
+#  Načítání bot_config.json
+# ════════════════════════════════════════════════════════════════════════════
+DEFAULT_BOT_CONFIG = {
+    "prikazy": {
+        "start":    "!start",
+        "stop":     "!stop",
+        "cislo":    "!cislo",
+        "vysledky": "!vysledky",
+    },
+    "zpravy": {
+        "bot_online":      "🤖 Bot je online! Moderátor může zadat {cmd_start} pro zahájení soutěže.",
+        "soutez_zahajena": "🎯 Soutěž zahájena! Napište číslo do chatu — počítá se váš POSLEDNÍ odhad.",
+        "soutez_probiha":  "⚠️ Soutěž už probíhá!",
+        "sber_ukoncen":    "🛑 Sběr ukončen. Celkem: {pocet} odhadů. Moderátor zadá {cmd_cislo} <číslo>",
+        "zadna_soutez":    "⚠️ Žádná soutěž momentálně neprobíhá.",
+        "spatny_prikaz":   "⚠️ Použití: {cmd_cislo} <číslo>  (např. {cmd_cislo} 254)",
+        "zadne_odhady":    "❌ Nikdo nic nehádal!",
+        "vitez_presny":    "🎯 PŘESNÝ ZÁSAH! {vitezove} | Správné číslo bylo: {cislo}",
+        "vitez_nejbliz":   "🏆 Nejblíže (rozdíl: {rozdil}): {vitezove} | Správné číslo bylo: {cislo}",
+    },
+}
+
+# Šablona která se zapíše jako bot_config.json pokud soubor neexistuje
+BOT_CONFIG_TEMPLATE = {
+    "_komentare": {
+        "popis": "Konfigurační soubor Kick Soutěžního Bota",
+        "poznamka_prikazy": "Příkazy jsou case-insensitive: START = start = Start",
+        "poznamka_zpravy": "Proměnné v {složených závorkách} se automaticky dosadí — nemazat je!",
+    },
+    "prikazy": {
+        "_vysvetleni": "Změň hodnoty na cokoliv chceš. Příklad: místo !start napiš START nebo /start",
+        "start":    "!start",
+        "stop":     "!stop",
+        "cislo":    "!cislo",
+        "vysledky": "!vysledky",
+    },
+    "zpravy": {
+        "_vysvetleni": "Texty které bot píše do chatu. Proměnné v {závorkách} jsou povinné.",
+        "bot_online":      "🤖 Bot je online! Moderátor může zadat {cmd_start} pro zahájení soutěže.",
+        "soutez_zahajena": "🎯 Soutěž zahájena! Napište číslo do chatu — počítá se váš POSLEDNÍ odhad.",
+        "soutez_probiha":  "⚠️ Soutěž už probíhá!",
+        "sber_ukoncen":    "🛑 Sběr ukončen. Celkem: {pocet} odhadů. Moderátor zadá {cmd_cislo} <číslo>",
+        "zadna_soutez":    "⚠️ Žádná soutěž momentálně neprobíhá.",
+        "spatny_prikaz":   "⚠️ Použití: {cmd_cislo} <číslo>  (např. {cmd_cislo} 254)",
+        "zadne_odhady":    "❌ Nikdo nic nehádal!",
+        "vitez_presny":    "🎯 PŘESNÝ ZÁSAH! {vitezove} | Správné číslo bylo: {cislo}",
+        "vitez_nejbliz":   "🏆 Nejblíže (rozdíl: {rozdil}): {vitezove} | Správné číslo bylo: {cislo}",
+    },
+    "_napoveda_promennych": {
+        "popis": "Tyto proměnné musí zůstat v příslušných zprávách:",
+        "bot_online":    "{cmd_start} = text příkazu start",
+        "sber_ukoncen":  "{pocet} = počet hráčů,  {cmd_cislo} = text příkazu cislo",
+        "spatny_prikaz": "{cmd_cislo} = text příkazu cislo",
+        "vitez_presny":  "{vitezove} = vítězové s číslem,  {cislo} = správné číslo",
+        "vitez_nejbliz": "{vitezove} = vítězové s číslem,  {cislo} = správné číslo,  {rozdil} = rozdíl",
+    },
+}
+
+
+def load_bot_config() -> dict:
+    """Načte bot_config.json. Při prvním spuštění vytvoří soubor s výchozími hodnotami."""
+    import copy
+    cfg = copy.deepcopy(DEFAULT_BOT_CONFIG)
+
+    if not BOT_CONFIG_FILE.exists():
+        # Vytvoř výchozí soubor
+        try:
+            BOT_CONFIG_FILE.write_text(
+                json.dumps(BOT_CONFIG_TEMPLATE, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+        except Exception as e:
+            print(f"[WARN] Nelze vytvořit bot_config.json: {e}")
+        return cfg
+
+    try:
+        user = json.loads(BOT_CONFIG_FILE.read_text(encoding="utf-8"))
+        # Přepíše jen klíče které uživatel definoval, ignoruje "_komentare" a "_vysvetleni"
+        for section in ("prikazy", "zpravy"):
+            if section in user and isinstance(user[section], dict):
+                for k, v in user[section].items():
+                    if not k.startswith("_") and isinstance(v, str):
+                        cfg[section][k] = v
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] bot_config.json má chybu: {e} — používám výchozí hodnoty")
+    except Exception as e:
+        print(f"[WARN] Nelze načíst bot_config.json: {e} — používám výchozí hodnoty")
+
+    return cfg
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  Logika bota
 # ════════════════════════════════════════════════════════════════════════════
 class BotEngine:
     def __init__(self, log_cb, status_cb, guess_cb):
-        self.log_cb    = log_cb    # callback pro log zprávy
-        self.status_cb = status_cb # callback pro status bar
-        self.guess_cb  = guess_cb  # callback pro aktualizaci tabulky odhadů
+        self.log_cb    = log_cb
+        self.status_cb = status_cb
+        self.guess_cb  = guess_cb
 
-        self.collecting      = False
-        self.guesses         = {}   # {username: int}
-        self.broadcaster_id  = 0
-        self.chatroom_id     = 0
-        self.ws              = None
-        self.ws_thread       = None
-        self.running         = False
+        self.collecting     = False
+        self.guesses        = {}
+        self.broadcaster_id = 0
+        self.chatroom_id    = 0
+        self.ws             = None
+        self.ws_thread      = None
+        self.running        = False
 
         self.tokens = {"access_token": "", "refresh_token": "", "expires_at": 0}
         self._load_tokens()
+        self.bcfg = load_bot_config()
 
-    # ── Persistence ──────────────────────────────────────────────────────────
+    def reload_bot_config(self):
+        """Znovu načte bot_config.json za běhu — bez restartu bota."""
+        self.bcfg = load_bot_config()
+        self.log("✅ bot_config.json znovu načten.", "success")
+
+    # ── Přístup ke konfiguraci ───────────────────────────────────────────────
+    def _cmd(self, key: str) -> str:
+        """Vrátí příkaz v lowercase pro porovnání (case-insensitive)."""
+        return self.bcfg["prikazy"].get(key, f"!{key}").strip().lower()
+
+    def _msg(self, key: str, **kwargs) -> str:
+        """Vrátí text zprávy s dosazenými proměnnými."""
+        template = self.bcfg["zpravy"].get(key, f"[{key}]")
+        # Automaticky dostupné proměnné — hodnoty příkazů z konfigurace
+        kwargs.setdefault("cmd_start",    self.bcfg["prikazy"].get("start",    "!start"))
+        kwargs.setdefault("cmd_stop",     self.bcfg["prikazy"].get("stop",     "!stop"))
+        kwargs.setdefault("cmd_cislo",    self.bcfg["prikazy"].get("cislo",    "!cislo"))
+        kwargs.setdefault("cmd_vysledky", self.bcfg["prikazy"].get("vysledky", "!vysledky"))
+        try:
+            return template.format(**kwargs)
+        except (KeyError, ValueError):
+            return template  # šablona obsahuje neznámou proměnnou — vrať tak jak je
+
+    # ── Tokeny ───────────────────────────────────────────────────────────────
     def _load_tokens(self):
         if TOKEN_FILE.exists():
             try:
@@ -85,15 +202,13 @@ class BotEngine:
 
     # ── OAuth ─────────────────────────────────────────────────────────────────
     def do_oauth(self, client_id, client_secret, on_done):
-        """Spustí OAuth flow v samostatném vlákně, zavolá on_done(True/False)."""
         def run():
             verifier, challenge = self._pkce_pair()
-            state_val = secrets.token_urlsafe(16)
             params = {
                 "response_type": "code", "client_id": client_id,
                 "redirect_uri": REDIRECT_URI, "scope": KICK_SCOPES,
                 "code_challenge": challenge, "code_challenge_method": "S256",
-                "state": state_val,
+                "state": secrets.token_urlsafe(16),
             }
             auth_url = f"{KICK_AUTH_URL}?{urlencode(params)}"
             self.log("Otevírám prohlížeč pro přihlášení ...", "info")
@@ -107,7 +222,13 @@ class BotEngine:
                     s.send_response(200)
                     s.send_header("Content-Type", "text/html; charset=utf-8")
                     s.end_headers()
-                    s.wfile.write("<html><body style='font-family:sans-serif;text-align:center;padding:60px;background:#0d0d0d;color:#53FC18'><h2>✅ Bot autorizován!</h2><p style='color:#aaa'>Toto okno můžeš zavřít.</p></body></html>".encode())
+                    s.wfile.write(
+                        b"<html><body style='font-family:sans-serif;text-align:center;"
+                        b"padding:60px;background:#0d0d0d;color:#53FC18'>"
+                        b"<h2>\xe2\x9c\x85 Bot autorizov\xc3\xa1n!</h2>"
+                        b"<p style='color:#aaa'>Toto okno m\xc5\xaf\xc5\xbe\xc3\xa9\xc5\xa1 zav\xc5\x99\xc3\xadt.</p>"
+                        b"</body></html>"
+                    )
                 def log_message(s, *a): pass
 
             try:
@@ -132,10 +253,10 @@ class BotEngine:
                     "code": code, "code_verifier": verifier,
                 }, timeout=15)
                 resp.raise_for_status()
-                data = resp.json()
-                self.tokens["access_token"]  = data["access_token"]
-                self.tokens["refresh_token"] = data.get("refresh_token", "")
-                self.tokens["expires_at"]    = time.time() + data.get("expires_in", 3600)
+                d = resp.json()
+                self.tokens["access_token"]  = d["access_token"]
+                self.tokens["refresh_token"] = d.get("refresh_token", "")
+                self.tokens["expires_at"]    = time.time() + d.get("expires_in", 3600)
                 self._save_tokens()
                 self.log("✅ Přihlášení úspěšné! Token uložen.", "success")
                 on_done(True)
@@ -156,10 +277,10 @@ class BotEngine:
             }, timeout=15)
             if not resp.ok:
                 return False
-            data = resp.json()
-            self.tokens["access_token"]  = data["access_token"]
-            self.tokens["refresh_token"] = data.get("refresh_token", self.tokens["refresh_token"])
-            self.tokens["expires_at"]    = time.time() + data.get("expires_in", 3600)
+            d = resp.json()
+            self.tokens["access_token"]  = d["access_token"]
+            self.tokens["refresh_token"] = d.get("refresh_token", self.tokens["refresh_token"])
+            self.tokens["expires_at"]    = time.time() + d.get("expires_in", 3600)
             self._save_tokens()
             self.log("Token automaticky obnoven.", "info")
             return True
@@ -194,10 +315,12 @@ class BotEngine:
                 headers={"Authorization": f"Bearer {self.tokens['access_token']}",
                          "Content-Type": "application/json"},
                 json={"broadcaster_user_id": self.broadcaster_id,
-                      "content": message, "type": "bot"},
+                      "content": message, "type": "user"},
                 timeout=10)
-            if not resp.ok:
-                self.log(f"Chat API chyba: {resp.status_code}", "warn")
+            if resp.ok:
+                self.log(f"[Chat ✓] {message}", "success")
+            else:
+                self.log(f"Chat API chyba: {resp.status_code} | {resp.text}", "error")
         except Exception as e:
             self.log(f"Chyba odesílání: {e}", "error")
 
@@ -212,49 +335,57 @@ class BotEngine:
         return int(m[0]) if m else None
 
     def handle_message(self, sender, content, client_id, client_secret):
-        username = sender.get("username", "???")
-        text = content.strip()
+        text  = content.strip()
+        lower = text.lower()
 
         if self.is_moderator(sender):
-            lower = text.lower()
-            if lower == "!start":
+            cmd_start    = self._cmd("start")
+            cmd_stop     = self._cmd("stop")
+            cmd_cislo    = self._cmd("cislo")
+            cmd_vysledky = self._cmd("vysledky")
+
+            if lower == cmd_start:
                 if self.collecting:
-                    self.send_chat("⚠️ Soutěž už probíhá!", client_id, client_secret)
+                    self.send_chat(self._msg("soutez_probiha"), client_id, client_secret)
                 else:
                     self.collecting = True
                     self.guesses = {}
                     self.guess_cb([])
                     self.log("▶ Soutěž zahájena", "success")
                     self.status_cb("collecting")
-                    self.send_chat("🎯 Soutěž zahájena! Napište číslo do chatu — počítá se váš POSLEDNÍ odhad.", client_id, client_secret)
+                    self.send_chat(self._msg("soutez_zahajena"), client_id, client_secret)
                 return
-            if lower == "!stop":
+
+            if lower == cmd_stop:
                 if not self.collecting:
-                    pass
-                    #self.send_chat("⚠️ Žádná soutěž neprobíhá.", client_id, client_secret)
+                    self.send_chat(self._msg("zadna_soutez"), client_id, client_secret)
                 else:
                     self.collecting = False
                     self.log(f"⏹ Sběr ukončen. Odhadů: {len(self.guesses)}", "warn")
                     self.status_cb("stopped")
-                    self.send_chat(f"🛑 Sběr ukončen. Celkem: {len(self.guesses)} odhadů.", client_id, client_secret)
+                    self.send_chat(
+                        self._msg("sber_ukoncen", pocet=len(self.guesses)),
+                        client_id, client_secret)
                 return
-            if lower == "!reset":
-                self.collecting = False
-                self.guesses = {}
-                self.guess_cb([])
-                self.log("🔄 Reset", "info")
-                self.status_cb("idle")
-                self.send_chat("🔄 Soutěž resetována.", client_id, client_secret)
-                return
-            if lower.startswith("!cislo"):
-                n = self.extract_int(text[6:])
+
+            # Příkaz cislo — může být "!cislo254" nebo "!cislo 254"
+            if lower == cmd_cislo or lower.startswith(cmd_cislo + " "):
+                suffix = text[len(cmd_cislo):].strip()
+                n = self.extract_int(suffix)
                 if n is None:
-                    self.send_chat("⚠️ Použití: !cislo <číslo>", client_id, client_secret)
+                    self.send_chat(self._msg("spatny_prikaz"), client_id, client_secret)
                 else:
                     self._evaluate(n, client_id, client_secret)
                 return
 
+            if lower == cmd_vysledky:
+                if not self.guesses:
+                    self.send_chat(self._msg("zadne_odhady"), client_id, client_secret)
+                return
+
+        # Hráčský odhad
         if self.collecting:
+            username = sender.get("username", "???")
             guess = self.extract_int(text)
             if guess is not None:
                 prev = self.guesses.get(username)
@@ -263,26 +394,24 @@ class BotEngine:
                     self.log(f"  {username} → {guess}", "info")
                 else:
                     self.log(f"  {username} → {guess}  (byl: {prev})", "dim")
-                # Aktualizuj tabulku (seřazeno abecedně)
-                rows = sorted(self.guesses.items())
-                self.guess_cb(rows)
+                self.guess_cb(sorted(self.guesses.items()))
 
     def _evaluate(self, correct, client_id, client_secret):
         self.log(f"━━━ Vyhodnocení — správné číslo: {correct} ━━━", "success")
         if not self.guesses:
-            self.send_chat("❌ Žádné odhady!", client_id, client_secret)
-            self.collecting = False
-            self.guesses = {}
-            self.guess_cb([])
-            self.log("🔄 Reset", "info")
-            self.status_cb("idle")
+            self.send_chat(self._msg("zadne_odhady"), client_id, client_secret)
             return
         distances = {u: abs(g - correct) for u, g in self.guesses.items()}
         min_dist  = min(distances.values())
         winners   = [(u, self.guesses[u]) for u, d in distances.items() if d == min_dist]
-        prefix    = "🎯 PŘESNÝ ZÁSAH!" if min_dist == 0 else f"🏆 Nejblíže (rozdíl: {min_dist}):"
         wstr      = ", ".join(f"{u} [{g}]" for u, g in winners)
-        self.send_chat(f"{prefix} {wstr} | Správné číslo: {correct}", client_id, client_secret)
+
+        if min_dist == 0:
+            msg = self._msg("vitez_presny", vitezove=wstr, cislo=correct)
+        else:
+            msg = self._msg("vitez_nejbliz", vitezove=wstr, cislo=correct, rozdil=min_dist)
+
+        self.send_chat(msg, client_id, client_secret)
         for u, g in winners:
             self.log(f"  🏆 {u} → {g}", "success")
         self.status_cb("done")
@@ -301,7 +430,7 @@ class BotEngine:
             self.log("✅ Připojeno k chatu!", "success")
             self.running = True
             self.status_cb("idle")
-            self.send_chat("🤖 Bot je online! Moderátor může zadat !start.", client_id, client_secret)
+            self.send_chat(self._msg("bot_online"), client_id, client_secret)
             on_connected(True)
 
         def on_msg(ws, raw):
@@ -353,7 +482,7 @@ class App(ctk.CTk):
         super().__init__()
         self.title("Kick Soutěžní Bot")
         self.geometry("960x700")
-        self.minsize(860, 720)
+        self.minsize(860, 850)
         self.configure(fg_color=DARK_BG)
 
         self._load_config()
@@ -362,7 +491,6 @@ class App(ctk.CTk):
             status_cb = self._set_status,
             guess_cb  = self._update_guesses,
         )
-        # Check existing token
         if self.engine._token_valid():
             self._token_status = "valid"
         elif self.engine.tokens.get("refresh_token"):
@@ -373,7 +501,7 @@ class App(ctk.CTk):
         self._build_ui()
         self._refresh_token_label()
 
-    # ── Config persistence ────────────────────────────────────────────────────
+    # ── Config ────────────────────────────────────────────────────────────────
     def _load_config(self):
         self._cfg = {"client_id": "", "client_secret": "", "channel": ""}
         if CONFIG_FILE.exists():
@@ -388,12 +516,11 @@ class App(ctk.CTk):
         self._cfg["channel"]       = self.entry_channel.get().strip()
         CONFIG_FILE.write_text(json.dumps(self._cfg, indent=2))
 
-    # ── UI build ──────────────────────────────────────────────────────────────
+    # ── UI ────────────────────────────────────────────────────────────────────
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=0)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
-
         self._build_sidebar()
         self._build_main()
 
@@ -404,29 +531,21 @@ class App(ctk.CTk):
         sb.grid_columnconfigure(0, weight=1)
 
         # Logo
-        logo = ctk.CTkLabel(sb, text="🎯 KickBot", font=ctk.CTkFont("", 22, "bold"),
-                            text_color=KICK_GREEN)
-        logo.grid(row=0, column=0, padx=24, pady=(28, 4), sticky="w")
-        sub = ctk.CTkLabel(sb, text="Soutěžní bot", font=ctk.CTkFont("", 12),
-                           text_color=TEXT_DIM)
-        sub.grid(row=1, column=0, padx=24, pady=(0, 24), sticky="w")
+        ctk.CTkLabel(sb, text="🎯 KickBot", font=ctk.CTkFont("", 22, "bold"),
+                     text_color=KICK_GREEN).grid(row=0, column=0, padx=24, pady=(28, 4), sticky="w")
+        ctk.CTkLabel(sb, text="Soutěžní bot", font=ctk.CTkFont("", 12),
+                     text_color=TEXT_DIM).grid(row=1, column=0, padx=24, pady=(0, 24), sticky="w")
+        ctk.CTkFrame(sb, height=1, fg_color=BORDER).grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 20))
 
-        sep = ctk.CTkFrame(sb, height=1, fg_color=BORDER)
-        sep.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 20))
-
-        # ── Nastavení ────────────────────────────────────────────────────────
+        # Nastavení
         self._section(sb, "NASTAVENÍ", 3)
-
         self._label(sb, "Client ID", 4)
-        self.entry_cid = self._entry(sb, 5, self._cfg["client_id"], show="")
-
+        self.entry_cid = self._entry(sb, 5, self._cfg["client_id"])
         self._label(sb, "Client Secret", 6)
         self.entry_csecret = self._entry(sb, 7, self._cfg["client_secret"], show="•")
-
         self._label(sb, "Název kanálu (slug)", 8)
         self.entry_channel = self._entry(sb, 9, self._cfg["channel"])
 
-        # Token status
         self.lbl_token = ctk.CTkLabel(sb, text="", font=ctk.CTkFont("", 11),
                                       wraplength=220, justify="left")
         self.lbl_token.grid(row=10, column=0, padx=16, pady=(8, 4), sticky="w")
@@ -438,12 +557,10 @@ class App(ctk.CTk):
             command=self._do_auth)
         self.btn_auth.grid(row=11, column=0, padx=16, pady=(4, 16), sticky="ew")
 
-        sep2 = ctk.CTkFrame(sb, height=1, fg_color=BORDER)
-        sep2.grid(row=12, column=0, sticky="ew", padx=16, pady=(0, 20))
+        ctk.CTkFrame(sb, height=1, fg_color=BORDER).grid(row=12, column=0, sticky="ew", padx=16, pady=(0, 20))
 
-        # ── Připojení ────────────────────────────────────────────────────────
+        # Připojení
         self._section(sb, "PŘIPOJENÍ", 13)
-
         self.btn_connect = ctk.CTkButton(sb, text="▶  Spustit bota",
             fg_color=KICK_GREEN, hover_color="#45d614", text_color="#000",
             font=ctk.CTkFont("", 13, "bold"), height=44, corner_radius=8,
@@ -455,22 +572,37 @@ class App(ctk.CTk):
             border_color="#ff4444", border_width=1,
             font=ctk.CTkFont("", 12), height=36, corner_radius=8,
             state="disabled", command=self._do_disconnect)
-        self.btn_disconnect.grid(row=15, column=0, padx=16, pady=(0, 16), sticky="ew")
+        self.btn_disconnect.grid(row=15, column=0, padx=16, pady=(0, 8), sticky="ew")
 
-        # Status indikátor
         self.lbl_status = ctk.CTkLabel(sb, text="⚪ Odpojeno",
             font=ctk.CTkFont("", 11), text_color=TEXT_DIM)
         self.lbl_status.grid(row=16, column=0, padx=16, pady=(0, 8), sticky="w")
 
-        # Spacer
-        sb.grid_rowconfigure(17, weight=1)
+        ctk.CTkFrame(sb, height=1, fg_color=BORDER).grid(row=17, column=0, sticky="ew", padx=16, pady=(4, 12))
 
-        # Odkaz na dokumentaci
-        help_btn = ctk.CTkButton(sb, text="❓ Jak získat Client ID?",
+        # Konfigurace
+        self._section(sb, "KONFIGURACE BOTA", 18)
+        self.btn_edit_cfg = ctk.CTkButton(sb, text="✏️  Upravit texty a příkazy",
+            fg_color="transparent", hover_color=CARD_BG,
+            text_color=TEXT_MID, border_color=BORDER, border_width=1,
+            font=ctk.CTkFont("", 11), height=34, corner_radius=8,
+            command=self._open_bot_config)
+        self.btn_edit_cfg.grid(row=19, column=0, padx=16, pady=(4, 4), sticky="ew")
+
+        self.btn_reload_cfg = ctk.CTkButton(sb, text="🔄  Načíst změny konfigurace",
+            fg_color="transparent", hover_color=CARD_BG,
+            text_color=TEXT_DIM, border_color=BORDER, border_width=1,
+            font=ctk.CTkFont("", 11), height=30, corner_radius=8,
+            command=self._reload_bot_config)
+        self.btn_reload_cfg.grid(row=20, column=0, padx=16, pady=(0, 8), sticky="ew")
+
+        sb.grid_rowconfigure(21, weight=1)
+
+        ctk.CTkButton(sb, text="❓ Jak získat Client ID?",
             fg_color="transparent", hover_color=CARD_BG, text_color=TEXT_DIM,
             font=ctk.CTkFont("", 11), height=28, anchor="w",
-            command=lambda: webbrowser.open("https://kick.com/settings/developer"))
-        help_btn.grid(row=18, column=0, padx=16, pady=(0, 16), sticky="ew")
+            command=lambda: webbrowser.open("https://kick.com/settings/developer")
+        ).grid(row=22, column=0, padx=16, pady=(0, 16), sticky="ew")
 
     def _build_main(self):
         main = ctk.CTkFrame(self, fg_color=DARK_BG, corner_radius=0)
@@ -479,31 +611,27 @@ class App(ctk.CTk):
         main.grid_rowconfigure(1, weight=2)
         main.grid_rowconfigure(3, weight=1)
 
-        # ── Status banner ─────────────────────────────────────────────────────
+        # Banner
         self.banner = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12, height=64)
         self.banner.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 12))
         self.banner.grid_propagate(False)
         self.banner.grid_columnconfigure(1, weight=1)
-
-        self.banner_icon = ctk.CTkLabel(self.banner, text="⚪",
-            font=ctk.CTkFont("", 28))
+        self.banner_icon = ctk.CTkLabel(self.banner, text="⚪", font=ctk.CTkFont("", 28))
         self.banner_icon.grid(row=0, column=0, padx=(20, 12), pady=12)
-
         self.banner_text = ctk.CTkLabel(self.banner, text="Bot je odpojený",
             font=ctk.CTkFont("", 16, "bold"), text_color=TEXT_MID, anchor="w")
         self.banner_text.grid(row=0, column=1, sticky="w")
-
-        self.banner_sub = ctk.CTkLabel(self.banner, text="Vyplň nastavení a klikni na Spustit bota",
+        self.banner_sub = ctk.CTkLabel(self.banner,
+            text="Vyplň nastavení a klikni na Spustit bota",
             font=ctk.CTkFont("", 11), text_color=TEXT_DIM, anchor="e")
         self.banner_sub.grid(row=0, column=2, padx=20, sticky="e")
 
-        # ── Tabulka odhadů ────────────────────────────────────────────────────
-        guesses_frame = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12)
-        guesses_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 12))
-        guesses_frame.grid_columnconfigure(0, weight=1)
-        guesses_frame.grid_rowconfigure(1, weight=1)
-
-        hdr = ctk.CTkFrame(guesses_frame, fg_color="transparent")
+        # Tabulka odhadů
+        gf = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12)
+        gf.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 12))
+        gf.grid_columnconfigure(0, weight=1)
+        gf.grid_rowconfigure(1, weight=1)
+        hdr = ctk.CTkFrame(gf, fg_color="transparent")
         hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 4))
         hdr.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(hdr, text="Odhady hráčů",
@@ -512,57 +640,45 @@ class App(ctk.CTk):
         self.lbl_count = ctk.CTkLabel(hdr, text="0 hráčů",
                      font=ctk.CTkFont("", 11), text_color=TEXT_DIM)
         self.lbl_count.grid(row=0, column=1, sticky="e")
-
-        # Scrollable list
-        self.guess_scroll = ctk.CTkScrollableFrame(
-            guesses_frame, fg_color="transparent", scrollbar_button_color=BORDER)
+        self.guess_scroll = ctk.CTkScrollableFrame(gf, fg_color="transparent",
+                                                    scrollbar_button_color=BORDER)
         self.guess_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.guess_scroll.grid_columnconfigure(0, weight=1)
-        self.guess_scroll.grid_columnconfigure(1, weight=0)
         self._guess_rows = []
-
-        # Placeholder
-        self.guess_placeholder = ctk.CTkLabel(
-            self.guess_scroll,
-            text="Zatím žádné odhady.\nZahaj soutěž příkazem !start v chatu.",
+        self.guess_placeholder = ctk.CTkLabel(self.guess_scroll,
+            text="Zatím žádné odhady.\nZahaj soutěž start příkazem v chatu.",
             font=ctk.CTkFont("", 12), text_color=TEXT_DIM, justify="center")
         self.guess_placeholder.grid(row=0, column=0, columnspan=2, pady=30)
 
-        # ── Log ───────────────────────────────────────────────────────────────
-        log_frame = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12)
-        log_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
-        log_frame.grid_columnconfigure(0, weight=1)
-        log_frame.grid_rowconfigure(1, weight=1)
-
-        log_hdr = ctk.CTkFrame(log_frame, fg_color="transparent")
-        log_hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 4))
-        log_hdr.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(log_hdr, text="Protokol",
+        # Log
+        lf = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12)
+        lf.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        lf.grid_columnconfigure(0, weight=1)
+        lf.grid_rowconfigure(1, weight=1)
+        lhdr = ctk.CTkFrame(lf, fg_color="transparent")
+        lhdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 4))
+        lhdr.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(lhdr, text="Protokol",
                      font=ctk.CTkFont("", 14, "bold"), text_color=TEXT_BRIGHT
                      ).grid(row=0, column=0, sticky="w")
-        clear_btn = ctk.CTkButton(log_hdr, text="Vymazat", width=70, height=24,
-            fg_color="transparent", hover_color=BORDER,
-            text_color=TEXT_DIM, font=ctk.CTkFont("", 11),
-            command=self._clear_log)
-        clear_btn.grid(row=0, column=1, sticky="e")
-
-        self.log_box = ctk.CTkTextbox(log_frame, fg_color="transparent",
-            font=ctk.CTkFont("Courier New", 11),
-            text_color=TEXT_MID, wrap="word",
-            scrollbar_button_color=BORDER)
+        ctk.CTkButton(lhdr, text="Vymazat", width=70, height=24,
+            fg_color="transparent", hover_color=BORDER, text_color=TEXT_DIM,
+            font=ctk.CTkFont("", 11), command=self._clear_log
+            ).grid(row=0, column=1, sticky="e")
+        self.log_box = ctk.CTkTextbox(lf, fg_color="transparent",
+            font=ctk.CTkFont("Courier New", 11), text_color=TEXT_MID,
+            wrap="word", scrollbar_button_color=BORDER)
         self.log_box.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.log_box.configure(state="disabled")
 
-    # ── Helper widgety ────────────────────────────────────────────────────────
+    # ── Helpers ───────────────────────────────────────────────────────────────
     def _section(self, parent, text, row):
         ctk.CTkLabel(parent, text=text, font=ctk.CTkFont("", 10, "bold"),
-                     text_color=TEXT_DIM).grid(
-            row=row, column=0, padx=16, pady=(0, 4), sticky="w")
+                     text_color=TEXT_DIM).grid(row=row, column=0, padx=16, pady=(0, 4), sticky="w")
 
     def _label(self, parent, text, row):
         ctk.CTkLabel(parent, text=text, font=ctk.CTkFont("", 12),
-                     text_color=TEXT_MID).grid(
-            row=row, column=0, padx=16, pady=(8, 2), sticky="w")
+                     text_color=TEXT_MID).grid(row=row, column=0, padx=16, pady=(8, 2), sticky="w")
 
     def _entry(self, parent, row, default="", show=""):
         e = ctk.CTkEntry(parent, fg_color=CARD_BG, border_color=BORDER,
@@ -572,7 +688,6 @@ class App(ctk.CTk):
         e.grid(row=row, column=0, padx=16, pady=(0, 4), sticky="ew")
         return e
 
-    # ── Token label ───────────────────────────────────────────────────────────
     def _refresh_token_label(self):
         if self._token_status == "valid":
             self.lbl_token.configure(text="✅ Bot je přihlášen", text_color=KICK_GREEN)
@@ -581,50 +696,40 @@ class App(ctk.CTk):
         else:
             self.lbl_token.configure(text="⚠️ Bot není přihlášen — klikni níže", text_color=YELLOW_WARN)
 
-    # ── Akce ─────────────────────────────────────────────────────────────────
+    # ── Akce tlačítek ─────────────────────────────────────────────────────────
     def _do_auth(self):
         cid = self.entry_cid.get().strip()
         cs  = self.entry_csecret.get().strip()
         if not cid or not cs:
-            self._append_log("Vyplň Client ID a Client Secret!", "error")
-            return
+            self._append_log("Vyplň Client ID a Client Secret!", "error"); return
         self._save_config()
         self.btn_auth.configure(state="disabled", text="⏳ Čekám na prohlížeč ...")
-
         def done(ok):
-            self.after(0, lambda: self.btn_auth.configure(
-                state="normal", text="🔑  Přihlásit bota"))
+            self.after(0, lambda: self.btn_auth.configure(state="normal", text="🔑  Přihlásit bota"))
             if ok:
                 self._token_status = "valid"
                 self.after(0, self._refresh_token_label)
-
         self.engine.do_oauth(cid, cs, done)
 
     def _do_connect(self):
         cid     = self.entry_cid.get().strip()
         cs      = self.entry_csecret.get().strip()
         channel = self.entry_channel.get().strip().lower()
-
         if not cid or not cs:
             self._append_log("Vyplň Client ID a Client Secret.", "error"); return
         if not channel:
             self._append_log("Vyplň název kanálu.", "error"); return
         if not self.engine._token_valid() and not self.engine.tokens.get("refresh_token"):
             self._append_log("Nejdřív přihlas bota tlačítkem 🔑 Přihlásit bota.", "error"); return
-
         self._save_config()
         self.btn_connect.configure(state="disabled", text="⏳ Připojuji ...")
-
         def connected(ok):
             if ok:
-                self.after(0, lambda: self.btn_connect.configure(
-                    state="disabled", text="▶  Spustit bota"))
+                self.after(0, lambda: self.btn_connect.configure(state="disabled", text="▶  Spustit bota"))
                 self.after(0, lambda: self.btn_disconnect.configure(state="normal"))
             else:
-                self.after(0, lambda: self.btn_connect.configure(
-                    state="normal", text="▶  Spustit bota"))
+                self.after(0, lambda: self.btn_connect.configure(state="normal", text="▶  Spustit bota"))
                 self._append_log("Připojení selhalo.", "error")
-
         self.engine.connect(channel, cid, cs, connected)
 
     def _do_disconnect(self):
@@ -632,39 +737,47 @@ class App(ctk.CTk):
         self.btn_connect.configure(state="normal", text="▶  Spustit bota")
         self.btn_disconnect.configure(state="disabled")
 
-    # ── Callbacks z engine ────────────────────────────────────────────────────
-    def _append_log(self, msg, level="info"):
-        colors = {
-            "info":    TEXT_MID,
-            "success": KICK_GREEN,
-            "warn":    YELLOW_WARN,
-            "error":   RED_ERR,
-            "dim":     TEXT_DIM,
-        }
-        color = colors.get(level, TEXT_MID)
-        ts    = datetime.now().strftime("%H:%M:%S")
-        line  = f"[{ts}] {msg}\n"
+    def _open_bot_config(self):
+        """Otevře bot_config.json ve výchozím textovém editoru."""
+        if not BOT_CONFIG_FILE.exists():
+            load_bot_config()  # vytvoří soubor
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(BOT_CONFIG_FILE.resolve()))
+            elif sys.platform == "darwin":
+                os.system(f"open '{BOT_CONFIG_FILE}'")
+            else:
+                os.system(f"xdg-open '{BOT_CONFIG_FILE}'")
+            self._append_log(
+                "bot_config.json otevřen v editoru. "
+                "Po uložení klikni na '🔄 Načíst změny konfigurace'.", "info")
+        except Exception as e:
+            self._append_log(f"Nelze otevřít editor: {e}", "error")
 
+    def _reload_bot_config(self):
+        """Znovu načte bot_config.json bez restartu bota."""
+        self.engine.reload_bot_config()
+
+    # ── Callbacks ─────────────────────────────────────────────────────────────
+    def _append_log(self, msg, level="info"):
+        ts   = datetime.now().strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}\n"
         def _insert():
             self.log_box.configure(state="normal")
             self.log_box.insert("end", line)
-            # Obarvi poslední řádek (aproximace — ctk textbox nepodporuje tags plně)
             self.log_box.configure(state="disabled")
             self.log_box.see("end")
-
         self.after(0, _insert)
 
     def _set_status(self, status):
         configs = {
-            "idle":         ("🟢", "Bot je online",         "Čeká na !start od moderátora",        KICK_GREEN),
-            "collecting":   ("🔴", "Sbírám odhady!",        "Moderátor zadá !stop pro ukončení",   "#ff4444"),
-            "stopped":      ("🟡", "Sběr ukončen",          "Moderátor zadá !cislo <číslo>",        YELLOW_WARN),
-            "done":         ("🏆", "Výsledky vyhlášeny!",   "Čeká na !start od moderátora",             KICK_GREEN),
-            #"done":         ("🏆", "Výsledky vyhlášeny!",   "Resetuj příkazem !reset",             KICK_GREEN),
-            "disconnected": ("⚪", "Odpojeno",              "Klikni na Spustit bota",              TEXT_DIM),
+            "idle":         ("🟢", "Bot je online",       "Čeká na příkaz od moderátora",   KICK_GREEN),
+            "collecting":   ("🔴", "Sbírám odhady!",      "Moderátor zadá stop příkaz",      "#ff4444"),
+            "stopped":      ("🟡", "Sběr ukončen",        "Moderátor zadá číslo příkaz",     YELLOW_WARN),
+            "done":         ("🏆", "Výsledky vyhlášeny!", "Čeká na příkaz od moderátora",    KICK_GREEN),
+            "disconnected": ("⚪", "Odpojeno",            "Klikni na Spustit bota",          TEXT_DIM),
         }
         icon, title, sub, color = configs.get(status, ("⚪", status, "", TEXT_DIM))
-
         def _update():
             self.banner_icon.configure(text=icon)
             self.banner_text.configure(text=title, text_color=color)
@@ -672,33 +785,26 @@ class App(ctk.CTk):
             dot = {"idle": "🟢 Online", "collecting": "🔴 Sbírám", "stopped": "🟡 Čekám",
                    "done": "🏆 Hotovo", "disconnected": "⚪ Odpojeno"}.get(status, status)
             self.lbl_status.configure(text=dot)
-
         self.after(0, _update)
 
     def _update_guesses(self, rows):
         def _redraw():
-            # Smaž staré řádky
             for w in self._guess_rows:
                 w.destroy()
             self._guess_rows.clear()
-
             if not rows:
                 self.guess_placeholder.grid(row=0, column=0, columnspan=2, pady=30)
                 self.lbl_count.configure(text="0 hráčů")
                 return
-
             self.guess_placeholder.grid_remove()
             self.lbl_count.configure(text=f"{len(rows)} hráčů")
-
             for i, (user, guess) in enumerate(rows):
                 bg = CARD_BG if i % 2 == 0 else PANEL_BG
                 row_f = ctk.CTkFrame(self.guess_scroll, fg_color=bg,
                                      corner_radius=4, height=28)
-                row_f.grid(row=i, column=0, columnspan=2, sticky="ew",
-                           padx=4, pady=1)
+                row_f.grid(row=i, column=0, columnspan=2, sticky="ew", padx=4, pady=1)
                 row_f.grid_columnconfigure(0, weight=1)
                 row_f.grid_propagate(False)
-
                 ctk.CTkLabel(row_f, text=user, font=ctk.CTkFont("", 11),
                              text_color=TEXT_BRIGHT, anchor="w"
                              ).grid(row=0, column=0, padx=10, pady=2, sticky="w")
@@ -706,7 +812,6 @@ class App(ctk.CTk):
                              text_color=KICK_GREEN, anchor="e"
                              ).grid(row=0, column=1, padx=10, pady=2, sticky="e")
                 self._guess_rows.append(row_f)
-
         self.after(0, _redraw)
 
     def _clear_log(self):
@@ -719,7 +824,6 @@ class App(ctk.CTk):
         self.destroy()
 
 
-# ── Spuštění ─────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     app = App()
     app.protocol("WM_DELETE_WINDOW", app.on_closing)
