@@ -51,7 +51,7 @@ DEFAULT_BOT_CONFIG = {
         "start":    "!start",
         "stop":     "!stop",
         "cislo":    "!cislo",
-        "vysledky": "!vysledky",
+        #"vysledky": "!vysledky",
     },
     "zpravy": {
         "bot_online":      "🤖 Bot je online! Moderátor může zadat {cmd_start} pro zahájení soutěže.",
@@ -78,7 +78,7 @@ BOT_CONFIG_TEMPLATE = {
         "start":    "!start",
         "stop":     "!stop",
         "cislo":    "!cislo",
-        "vysledky": "!vysledky",
+        #"vysledky": "!vysledky",
     },
     "zpravy": {
         "_vysvetleni": "Texty které bot píše do chatu. Proměnné v {závorkách} jsou povinné.",
@@ -173,7 +173,7 @@ class BotEngine:
         kwargs.setdefault("cmd_start",    self.bcfg["prikazy"].get("start",    "!start"))
         kwargs.setdefault("cmd_stop",     self.bcfg["prikazy"].get("stop",     "!stop"))
         kwargs.setdefault("cmd_cislo",    self.bcfg["prikazy"].get("cislo",    "!cislo"))
-        kwargs.setdefault("cmd_vysledky", self.bcfg["prikazy"].get("vysledky", "!vysledky"))
+        #kwargs.setdefault("cmd_vysledky", self.bcfg["prikazy"].get("vysledky", "!vysledky"))
         try:
             return template.format(**kwargs)
         except (KeyError, ValueError):
@@ -342,7 +342,7 @@ class BotEngine:
             cmd_start    = self._cmd("start")
             cmd_stop     = self._cmd("stop")
             cmd_cislo    = self._cmd("cislo")
-            cmd_vysledky = self._cmd("vysledky")
+            #cmd_vysledky = self._cmd("vysledky")
 
             if lower == cmd_start:
                 if self.collecting:
@@ -378,10 +378,10 @@ class BotEngine:
                     self._evaluate(n, client_id, client_secret)
                 return
 
-            if lower == cmd_vysledky:
-                if not self.guesses:
-                    self.send_chat(self._msg("zadne_odhady"), client_id, client_secret)
-                return
+            #if lower == cmd_vysledky:
+            #    if not self.guesses:
+            #        self.send_chat(self._msg("zadne_odhady"), client_id, client_secret)
+            #    return
 
         # Hráčský odhad
         if self.collecting:
