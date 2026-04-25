@@ -771,10 +771,10 @@ class App(ctk.CTk):
 
     def _set_status(self, status):
         configs = {
-            "idle":         ("🟢", "Bot je online",       "Čeká na příkaz od moderátora",   KICK_GREEN),
+            "idle":         ("🟢", "Bot je online",       "Čeká na příkaz start moderátora",   KICK_GREEN),
             "collecting":   ("🔴", "Sbírám odhady!",      "Moderátor zadá stop příkaz",      "#ff4444"),
             "stopped":      ("🟡", "Sběr ukončen",        "Moderátor zadá číslo příkaz",     YELLOW_WARN),
-            "done":         ("🏆", "Výsledky vyhlášeny!", "Čeká na příkaz od moderátora",    KICK_GREEN),
+            "done":         ("🏆", "Výsledky vyhlášeny!", "Čeká na příkaz start moderátora",    KICK_GREEN),
             "disconnected": ("⚪", "Odpojeno",            "Klikni na Spustit bota",          TEXT_DIM),
         }
         icon, title, sub, color = configs.get(status, ("⚪", status, "", TEXT_DIM))
