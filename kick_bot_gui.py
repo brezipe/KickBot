@@ -19,7 +19,7 @@ import websocket
 KICK_AUTH_URL   = "https://id.kick.com/oauth/authorize"
 KICK_TOKEN_URL  = "https://id.kick.com/oauth/token"
 KICK_API_URL    = "https://api.kick.com/public/v1"
-KICK_SCOPES     = "user:read channel:read chat:write"
+KICK_SCOPES     = "user:read chat:write"
 PUSHER_WS       = ("wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
                    "?protocol=7&client=js&version=8.4.0-rc2&flash=false")
 REDIRECT_URI    = "http://localhost:7878/callback"
@@ -51,7 +51,7 @@ DEFAULT_BOT_CONFIG = {
         "start":    "!start",
         "stop":     "!stop",
         "cislo":    "!cislo",
-        #"vysledky": "!vysledky",
+        "vysledky": "!vysledky",
     },
     "zpravy": {
         "bot_online":      "🤖 Bot je online! Moderátor může zadat {cmd_start} pro zahájení soutěže.",
@@ -78,7 +78,7 @@ BOT_CONFIG_TEMPLATE = {
         "start":    "!start",
         "stop":     "!stop",
         "cislo":    "!cislo",
-        #"vysledky": "!vysledky",
+        "vysledky": "!vysledky",
     },
     "zpravy": {
         "_vysvetleni": "Texty které bot píše do chatu. Proměnné v {závorkách} jsou povinné.",
@@ -173,7 +173,7 @@ class BotEngine:
         kwargs.setdefault("cmd_start",    self.bcfg["prikazy"].get("start",    "!start"))
         kwargs.setdefault("cmd_stop",     self.bcfg["prikazy"].get("stop",     "!stop"))
         kwargs.setdefault("cmd_cislo",    self.bcfg["prikazy"].get("cislo",    "!cislo"))
-        #kwargs.setdefault("cmd_vysledky", self.bcfg["prikazy"].get("vysledky", "!vysledky"))
+        kwargs.setdefault("cmd_vysledky", self.bcfg["prikazy"].get("vysledky", "!vysledky"))
         try:
             return template.format(**kwargs)
         except (KeyError, ValueError):
@@ -203,6 +203,9 @@ class BotEngine:
     # ── OAuth ─────────────────────────────────────────────────────────────────
     def do_oauth(self, client_id, client_secret, on_done):
         def run():
+            # Vymaž starý token aby se nepoužil pokud přihlášení selže
+            self.tokens = {"access_token": "", "refresh_token": "", "expires_at": 0}
+
             verifier, challenge = self._pkce_pair()
             params = {
                 "response_type": "code", "client_id": client_id,
@@ -215,20 +218,31 @@ class BotEngine:
             webbrowser.open(auth_url)
 
             result = {}
+            log_ref = self.log
+
             class H(BaseHTTPRequestHandler):
                 def do_GET(s):
-                    qs = parse_qs(urlparse(s.path).query)
-                    result["code"] = qs.get("code", [""])[0]
+                    parsed = urlparse(s.path)
+                    qs = parse_qs(parsed.query)
+                    result["raw"]        = parsed.query
+                    result["code"]       = qs.get("code",  [""])[0]
+                    result["error"]      = qs.get("error", [""])[0]
+                    result["error_desc"] = qs.get("error_description", [""])[0]
                     s.send_response(200)
                     s.send_header("Content-Type", "text/html; charset=utf-8")
                     s.end_headers()
-                    s.wfile.write(
-                        b"<html><body style='font-family:sans-serif;text-align:center;"
-                        b"padding:60px;background:#0d0d0d;color:#53FC18'>"
-                        b"<h2>\xe2\x9c\x85 Bot autorizov\xc3\xa1n!</h2>"
-                        b"<p style='color:#aaa'>Toto okno m\xc5\xaf\xc5\xbe\xc3\xa9\xc5\xa1 zav\xc5\x99\xc3\xadt.</p>"
-                        b"</body></html>"
-                    )
+                    if result["code"]:
+                        s.wfile.write(b"<html><body style='font-family:sans-serif;"
+                            b"text-align:center;padding:60px;background:#0d0d0d;color:#53FC18'>"
+                            b"<h2>Bot autorizovan!</h2>"
+                            b"<p style='color:#aaa'>Toto okno muzete zavrit.</p>"
+                            b"</body></html>")
+                    else:
+                        s.wfile.write(b"<html><body style='font-family:sans-serif;"
+                            b"text-align:center;padding:60px;background:#0d0d0d;color:#ff4444'>"
+                            b"<h2>Autorizace selhala</h2>"
+                            b"<p style='color:#aaa'>Zkuste to znovu v aplikaci.</p>"
+                            b"</body></html>")
                 def log_message(s, *a): pass
 
             try:
@@ -239,19 +253,36 @@ class BotEngine:
                 srv.handle_request()
             except Exception as e:
                 self.log(f"Chyba callback serveru: {e}", "error")
-                on_done(False); return
+                on_done(False)
+                return
+
+            self.log(f"[DEBUG] Callback query: '{result.get('raw', '(prazdny)')}'", "dim")
+
+            if result.get("error"):
+                self.log(f"Kick vrátil chybu: {result['error']} — {result.get('error_desc','')}", "error")
+                on_done(False)
+                return
 
             code = result.get("code", "")
             if not code:
-                self.log("Autorizace zrušena nebo vypršela.", "error")
-                on_done(False); return
+                self.log(
+                    "Kick neposlal autorizační kód! "
+                    "Zkontroluj Redirect URI na kick.com/settings/developer — "
+                    "musí být PŘESNĚ: http://localhost:7878/callback", "error")
+                on_done(False)
+                return
 
             try:
+                self.log("[DEBUG] Vyměňuji kód za token ...", "dim")
                 resp = requests.post(KICK_TOKEN_URL, data={
-                    "grant_type": "authorization_code", "client_id": client_id,
-                    "client_secret": client_secret, "redirect_uri": REDIRECT_URI,
-                    "code": code, "code_verifier": verifier,
+                    "grant_type":    "authorization_code",
+                    "client_id":     client_id,
+                    "client_secret": client_secret,
+                    "redirect_uri":  REDIRECT_URI,
+                    "code":          code,
+                    "code_verifier": verifier,
                 }, timeout=15)
+                self.log(f"[DEBUG] Token response: {resp.status_code} | {resp.text[:300]}", "dim")
                 resp.raise_for_status()
                 d = resp.json()
                 self.tokens["access_token"]  = d["access_token"]
@@ -265,6 +296,7 @@ class BotEngine:
                 on_done(False)
 
         threading.Thread(target=run, daemon=True).start()
+
 
     def refresh_token(self, client_id, client_secret):
         if not self.tokens["refresh_token"]:
@@ -299,24 +331,53 @@ class BotEngine:
                                 impersonate="chrome124", timeout=15)
             r.raise_for_status()
             d = r.json()
-            return d["id"], d["chatroom"]["id"]
+            broadcaster_user_id = d["user_id"]   # ← správné pole!
+            chatroom_id = d["chatroom"]["id"]
+            return broadcaster_user_id, chatroom_id
         except Exception as e:
             self.log(f"Kanál nenalezen: {e}", "error")
             return None, None
 
+    def get_my_user_id(self) -> int | None:
+        """Zjistí user ID přihlášeného bot účtu."""
+        try:
+            resp = requests.get(f"{KICK_API_URL}/users/me",
+                headers={"Authorization": f"Bearer {self.tokens['access_token']}"},
+                timeout=10)
+            if resp.ok:
+                data = resp.json()
+                # Kick API vrací buď {"data": {...}} nebo přímo objekt
+                user = data.get("data", data)
+                uid = user.get("user_id") or user.get("id")
+                self.log(f"[DEBUG] Bot user_id={uid}, username={user.get('username','?')}", "dim")
+                return uid
+            else:
+                self.log(f"[DEBUG] /users/me chyba: {resp.status_code} | {resp.text}", "error")
+                return None
+        except Exception as e:
+            self.log(f"[DEBUG] /users/me výjimka: {e}", "error")
+            return None
+
     def send_chat(self, message, client_id, client_secret):
         if not self.broadcaster_id:
+            self.log("[DEBUG] broadcaster_id není nastaven", "error")
             return
         if not self.ensure_token(client_id, client_secret):
             self.log("Nelze poslat zprávu — chybí token.", "error")
             return
         try:
+            payload = {
+                "broadcaster_user_id": self.broadcaster_id,
+                "content": message,
+                "type": "user",
+            }
+            self.log(f"[DEBUG] POST {KICK_API_URL}/chat | payload={payload}", "dim")
             resp = requests.post(f"{KICK_API_URL}/chat",
                 headers={"Authorization": f"Bearer {self.tokens['access_token']}",
                          "Content-Type": "application/json"},
-                json={"broadcaster_user_id": self.broadcaster_id,
-                      "content": message, "type": "user"},
+                json=payload,
                 timeout=10)
+            self.log(f"[DEBUG] Response: {resp.status_code} | {resp.text[:300]}", "dim")
             if resp.ok:
                 self.log(f"[Chat ✓] {message}", "success")
             else:
@@ -342,7 +403,7 @@ class BotEngine:
             cmd_start    = self._cmd("start")
             cmd_stop     = self._cmd("stop")
             cmd_cislo    = self._cmd("cislo")
-            #cmd_vysledky = self._cmd("vysledky")
+            cmd_vysledky = self._cmd("vysledky")
 
             if lower == cmd_start:
                 if self.collecting:
@@ -378,10 +439,10 @@ class BotEngine:
                     self._evaluate(n, client_id, client_secret)
                 return
 
-            #if lower == cmd_vysledky:
-            #    if not self.guesses:
-            #        self.send_chat(self._msg("zadne_odhady"), client_id, client_secret)
-            #    return
+            if lower == cmd_vysledky:
+                if not self.guesses:
+                    self.send_chat(self._msg("zadne_odhady"), client_id, client_secret)
+                return
 
         # Hráčský odhad
         if self.collecting:
@@ -430,6 +491,8 @@ class BotEngine:
             self.log("✅ Připojeno k chatu!", "success")
             self.running = True
             self.status_cb("idle")
+            # Ověř token a zjisti bot user ID
+            self.get_my_user_id()
             self.send_chat(self._msg("bot_online"), client_id, client_secret)
             on_connected(True)
 
@@ -771,10 +834,10 @@ class App(ctk.CTk):
 
     def _set_status(self, status):
         configs = {
-            "idle":         ("🟢", "Bot je online",       "Čeká na příkaz start moderátora",   KICK_GREEN),
+            "idle":         ("🟢", "Bot je online",       "Čeká na příkaz od moderátora",   KICK_GREEN),
             "collecting":   ("🔴", "Sbírám odhady!",      "Moderátor zadá stop příkaz",      "#ff4444"),
             "stopped":      ("🟡", "Sběr ukončen",        "Moderátor zadá číslo příkaz",     YELLOW_WARN),
-            "done":         ("🏆", "Výsledky vyhlášeny!", "Čeká na příkaz start moderátora",    KICK_GREEN),
+            "done":         ("🏆", "Výsledky vyhlášeny!", "Čeká na příkaz od moderátora",    KICK_GREEN),
             "disconnected": ("⚪", "Odpojeno",            "Klikni na Spustit bota",          TEXT_DIM),
         }
         icon, title, sub, color = configs.get(status, ("⚪", status, "", TEXT_DIM))
