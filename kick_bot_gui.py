@@ -543,7 +543,7 @@ class BotEngine:
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Kick Soutěžní Bot")
+        self.title("Kick Soutěžní Bot v0.0.1")
         self.geometry("960x700")
         self.minsize(860, 850)
         self.configure(fg_color=DARK_BG)
