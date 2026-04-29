@@ -10,9 +10,9 @@ $ source ./venv/bin/activate
 
 
 
-pip install -f requirements.py
+pip install -f requirements.txt
 
-python build.exe
+python build_exe.py
 
 
 dist/ Tady je exe
