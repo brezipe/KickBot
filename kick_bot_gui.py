@@ -15,6 +15,8 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
+BUILD_VERSION = "0.0.3"
+
 DEBUG = False
 
 # ── Kick API konstanty ───────────────────────────────────────────────────────
@@ -538,7 +540,7 @@ class BotEngine:
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Kick Soutěžní Bot v0.0.3")
+        self.title(f"Kick Soutěžní Bot v{BUILD_VERSION}")
         self.geometry("960x700")
         self.minsize(880, 850)
         self.configure(fg_color=DARK_BG)

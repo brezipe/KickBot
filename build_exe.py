@@ -1,38 +1,52 @@
-"""
-build_exe.py — vytvoří KickBot.exe pomocí PyInstaller
-
-Spuštění (na Windows):
-    pip install pyinstaller
-    python build_exe.py
-"""
-
+import datetime
 import subprocess
+import re
+import os
 import sys
 
+# 1. Vygenerování verze podle aktuálního času (např. 26.04.30.1420)
+new_version = datetime.datetime.now().strftime("%y%m%d.%H%M")
+print(f"--- Generuji verzi: {new_version} ---")
+
+exe_name = f"KickBot_{new_version.replace('.', '_')}"
+
+# 2. Aktualizace BUILD_VERSION v kick_bot_gui.py
+main_script = "kick_bot_gui.py"
+
+if os.path.exists(main_script):
+    with open(main_script, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    content = re.sub(r'BUILD_VERSION\s*=\s*".*?"', f'BUILD_VERSION = "{new_version}"', content)
+
+    with open(main_script, "w", encoding="utf-8") as f:
+        f.write(content)
+    print("--- Verze v kick_bot_gui.py aktualizována ---")
+else:
+    print("CHYBA: kick_bot_gui.py nenalezen!")
+    exit()
+
+# 3. Spuštění PyInstaller
+print("--- Spouštím PyInstaller... ---")
 cmd = [
-    "pyinstaller",
-    "--onefile",                     # vše v jednom .exe
-    "--windowed",                    # žádné konzolové okno
-    "--name", "KickBot",
-    "--icon", "icon.ico",            # ikona (pokud existuje)
-    # Skryté importy které PyInstaller nedetekuje automaticky
-    "--hidden-import", "customtkinter",
+    sys.executable, "-m", "PyInstaller",
+    "--onefile",
+    "--noconsole",
+    "--name", exe_name,
+    "--collect-all", "customtkinter",
+    "--collect-all", "darkdetect",
     "--hidden-import", "curl_cffi",
     "--hidden-import", "websocket",
     "--hidden-import", "requests",
-    "--collect-all", "customtkinter",
-    "kick_bot_gui.py",
 ]
 
-# Pokud icon.ico neexistuje, odeber parametry s ikonou
-import os
-if not os.path.exists("icon.ico"):
-    cmd = [c for c in cmd if "icon" not in c.lower() and "ico" not in c.lower()]
+if os.path.exists("icon.ico"):
+    cmd += ["--icon", "icon.ico", "--add-data", "icon.ico;."]
 
-print("Spouštím PyInstaller ...")
-print(" ".join(cmd))
-result = subprocess.run(cmd)
-if result.returncode == 0:
-    print("\n✅ Hotovo! Soubor KickBot.exe najdeš ve složce dist/")
-else:
-    print("\n❌ Build selhal. Zkontroluj výpis výše.")
+cmd.append(main_script)
+
+try:
+    subprocess.run(cmd, check=True)
+    print(f"\n--- HOTOVO! Soubor {exe_name}.exe najdeš ve složce dist ---")
+except subprocess.CalledProcessError:
+    print("\n--- CHYBA: PyInstaller selhal! ---")
