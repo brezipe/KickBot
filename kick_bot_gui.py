@@ -15,6 +15,8 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
+DEBUG = False
+
 # ── Kick API konstanty ───────────────────────────────────────────────────────
 KICK_AUTH_URL   = "https://id.kick.com/oauth/authorize"
 KICK_TOKEN_URL  = "https://id.kick.com/oauth/token"
@@ -51,7 +53,7 @@ DEFAULT_BOT_CONFIG = {
         "start":    "!start",
         "stop":     "!stop",
         "cislo":    "!cislo",
-        "vysledky": "!vysledky",
+        # "vysledky": "!vysledky",
     },
     "zpravy": {
         "bot_online":      "🤖 Bot je online! Moderátor může zadat {cmd_start} pro zahájení soutěže.",
@@ -78,7 +80,7 @@ BOT_CONFIG_TEMPLATE = {
         "start":    "!start",
         "stop":     "!stop",
         "cislo":    "!cislo",
-        "vysledky": "!vysledky",
+        # "vysledky": "!vysledky",
     },
     "zpravy": {
         "_vysvetleni": "Texty které bot píše do chatu. Proměnné v {závorkách} jsou povinné.",
@@ -173,7 +175,7 @@ class BotEngine:
         kwargs.setdefault("cmd_start",    self.bcfg["prikazy"].get("start",    "!start"))
         kwargs.setdefault("cmd_stop",     self.bcfg["prikazy"].get("stop",     "!stop"))
         kwargs.setdefault("cmd_cislo",    self.bcfg["prikazy"].get("cislo",    "!cislo"))
-        kwargs.setdefault("cmd_vysledky", self.bcfg["prikazy"].get("vysledky", "!vysledky"))
+        # kwargs.setdefault("cmd_vysledky", self.bcfg["prikazy"].get("vysledky", "!vysledky"))
         try:
             return template.format(**kwargs)
         except (KeyError, ValueError):
@@ -256,8 +258,6 @@ class BotEngine:
                 on_done(False)
                 return
 
-            self.log(f"[DEBUG] Callback query: '{result.get('raw', '(prazdny)')}'", "dim")
-
             if result.get("error"):
                 self.log(f"Kick vrátil chybu: {result['error']} — {result.get('error_desc','')}", "error")
                 on_done(False)
@@ -273,7 +273,6 @@ class BotEngine:
                 return
 
             try:
-                self.log("[DEBUG] Vyměňuji kód za token ...", "dim")
                 resp = requests.post(KICK_TOKEN_URL, data={
                     "grant_type":    "authorization_code",
                     "client_id":     client_id,
@@ -282,7 +281,6 @@ class BotEngine:
                     "code":          code,
                     "code_verifier": verifier,
                 }, timeout=15)
-                self.log(f"[DEBUG] Token response: {resp.status_code} | {resp.text[:300]}", "dim")
                 resp.raise_for_status()
                 d = resp.json()
                 self.tokens["access_token"]  = d["access_token"]
@@ -331,9 +329,7 @@ class BotEngine:
                                 impersonate="chrome124", timeout=15)
             r.raise_for_status()
             d = r.json()
-            broadcaster_user_id = d["user_id"]   # ← správné pole!
-            chatroom_id = d["chatroom"]["id"]
-            return broadcaster_user_id, chatroom_id
+            return d["id"], d["chatroom"]["id"]
         except Exception as e:
             self.log(f"Kanál nenalezen: {e}", "error")
             return None, None
@@ -349,18 +345,14 @@ class BotEngine:
                 # Kick API vrací buď {"data": {...}} nebo přímo objekt
                 user = data.get("data", data)
                 uid = user.get("user_id") or user.get("id")
-                self.log(f"[DEBUG] Bot user_id={uid}, username={user.get('username','?')}", "dim")
                 return uid
             else:
-                self.log(f"[DEBUG] /users/me chyba: {resp.status_code} | {resp.text}", "error")
                 return None
         except Exception as e:
-            self.log(f"[DEBUG] /users/me výjimka: {e}", "error")
             return None
 
     def send_chat(self, message, client_id, client_secret):
         if not self.broadcaster_id:
-            self.log("[DEBUG] broadcaster_id není nastaven", "error")
             return
         if not self.ensure_token(client_id, client_secret):
             self.log("Nelze poslat zprávu — chybí token.", "error")
@@ -369,17 +361,18 @@ class BotEngine:
             payload = {
                 "broadcaster_user_id": self.broadcaster_id,
                 "content": message,
-                "type": "user",
+                "type": "bot",
             }
-            self.log(f"[DEBUG] POST {KICK_API_URL}/chat | payload={payload}", "dim")
             resp = requests.post(f"{KICK_API_URL}/chat",
                 headers={"Authorization": f"Bearer {self.tokens['access_token']}",
                          "Content-Type": "application/json"},
                 json=payload,
                 timeout=10)
-            self.log(f"[DEBUG] Response: {resp.status_code} | {resp.text[:300]}", "dim")
             if resp.ok:
-                self.log(f"[Chat ✓] {message}", "success")
+                if DEBUG:
+                    self.log(f"[Chat ✓] {resp.status_code} | {resp.text[:200]}", "success")
+                else:
+                    self.log(f"[Chat ✓] {message}", "success")
             else:
                 self.log(f"Chat API chyba: {resp.status_code} | {resp.text}", "error")
         except Exception as e:
@@ -403,7 +396,7 @@ class BotEngine:
             cmd_start    = self._cmd("start")
             cmd_stop     = self._cmd("stop")
             cmd_cislo    = self._cmd("cislo")
-            cmd_vysledky = self._cmd("vysledky")
+            # cmd_vysledky = self._cmd("vysledky")
 
             if lower == cmd_start:
                 if self.collecting:
@@ -439,10 +432,10 @@ class BotEngine:
                     self._evaluate(n, client_id, client_secret)
                 return
 
-            if lower == cmd_vysledky:
-                if not self.guesses:
-                    self.send_chat(self._msg("zadne_odhady"), client_id, client_secret)
-                return
+            # if lower == cmd_vysledky:
+            #     if not self.guesses:
+            #         self.send_chat(self._msg("zadne_odhady"), client_id, client_secret)
+            #     return
 
         # Hráčský odhad
         if self.collecting:
@@ -484,6 +477,8 @@ class BotEngine:
             on_connected(False); return
         self.broadcaster_id = bid
         self.chatroom_id    = cid
+        if DEBUG:
+            self.log(f"[DEBUG] broadcaster_id={bid}  chatroom_id={cid}", "info")
 
         def on_open(ws):
             ws.send(json.dumps({"event": "pusher:subscribe",
@@ -543,9 +538,9 @@ class BotEngine:
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Kick Soutěžní Bot v0.0.1")
+        self.title("Kick Soutěžní Bot v0.0.3")
         self.geometry("960x700")
-        self.minsize(860, 850)
+        self.minsize(880, 850)
         self.configure(fg_color=DARK_BG)
 
         self._load_config()
@@ -613,12 +608,24 @@ class App(ctk.CTk):
                                       wraplength=220, justify="left")
         self.lbl_token.grid(row=10, column=0, padx=16, pady=(8, 4), sticky="w")
 
-        self.btn_auth = ctk.CTkButton(sb, text="🔑  Přihlásit bota",
+        auth_row = ctk.CTkFrame(sb, fg_color="transparent")
+        auth_row.grid(row=11, column=0, padx=16, pady=(4, 16), sticky="ew")
+        auth_row.grid_columnconfigure(0, weight=1)
+        auth_row.grid_columnconfigure(1, weight=0)
+
+        self.btn_auth = ctk.CTkButton(auth_row, text="🔑  Přihlásit bota",
             fg_color="#1e3a1e", hover_color="#2a4f2a", text_color=KICK_GREEN,
             border_color=KICK_GREEN, border_width=1,
             font=ctk.CTkFont("", 12, "bold"), height=38, corner_radius=8,
             command=self._do_auth)
-        self.btn_auth.grid(row=11, column=0, padx=16, pady=(4, 16), sticky="ew")
+        self.btn_auth.grid(row=0, column=0, padx=(0, 4), sticky="ew")
+
+        self.btn_reset_login = ctk.CTkButton(auth_row, text="🗑",
+            fg_color="#2a1a1a", hover_color="#3a2020", text_color="#ff6666",
+            border_color="#ff4444", border_width=1,
+            font=ctk.CTkFont("", 14), width=38, height=38, corner_radius=8,
+            command=self._do_login_reset)
+        self.btn_reset_login.grid(row=0, column=1, sticky="e")
 
         ctk.CTkFrame(sb, height=1, fg_color=BORDER).grid(row=12, column=0, sticky="ew", padx=16, pady=(0, 20))
 
@@ -773,6 +780,15 @@ class App(ctk.CTk):
                 self._token_status = "valid"
                 self.after(0, self._refresh_token_label)
         self.engine.do_oauth(cid, cs, done)
+
+    def _do_login_reset(self):
+        """Smaže uložený token a vynutí nové přihlášení."""
+        if TOKEN_FILE.exists():
+            TOKEN_FILE.unlink()
+        self.engine.tokens = {"access_token": "", "refresh_token": "", "expires_at": 0}
+        self._token_status = "none"
+        self._refresh_token_label()
+        self._append_log("Token smazán. Klikni na Přihlásit bota.", "warn")
 
     def _do_connect(self):
         cid     = self.entry_cid.get().strip()

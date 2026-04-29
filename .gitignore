@@ -3,3 +3,5 @@ dist/
 build/
 *.json
 *.spec
+claude_notes.txt
+*png
