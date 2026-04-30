@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "0.0.3"
+BUILD_VERSION = "260430.2045"
 
 DEBUG = False
 
@@ -67,6 +67,7 @@ DEFAULT_BOT_CONFIG = {
         "zadne_odhady":    "❌ Nikdo nic nehádal!",
         "vitez_presny":    "🎯 PŘESNÝ ZÁSAH! {vitezove} | Správné číslo bylo: {cislo}",
         "vitez_nejbliz":   "🏆 Nejblíže (rozdíl: {rozdil}): {vitezove} | Správné číslo bylo: {cislo}",
+        "cislo_obsazeno":  "⛔ @{username} Číslo {cislo} už zadal/a {jiny_hrac} — vyber si jiné!",
     },
 }
 
@@ -95,6 +96,7 @@ BOT_CONFIG_TEMPLATE = {
         "zadne_odhady":    "❌ Nikdo nic nehádal!",
         "vitez_presny":    "🎯 PŘESNÝ ZÁSAH! {vitezove} | Správné číslo bylo: {cislo}",
         "vitez_nejbliz":   "🏆 Nejblíže (rozdíl: {rozdil}): {vitezove} | Správné číslo bylo: {cislo}",
+        "cislo_obsazeno":  "⛔ @{username} Číslo {cislo} už zadal/a {jiny_hrac} — vyber si jiné!",
     },
     "_napoveda_promennych": {
         "popis": "Tyto proměnné musí zůstat v příslušných zprávách:",
@@ -103,6 +105,7 @@ BOT_CONFIG_TEMPLATE = {
         "spatny_prikaz": "{cmd_cislo} = text příkazu cislo",
         "vitez_presny":  "{vitezove} = vítězové s číslem,  {cislo} = správné číslo",
         "vitez_nejbliz": "{vitezove} = vítězové s číslem,  {cislo} = správné číslo,  {rozdil} = rozdíl",
+        "cislo_obsazeno": "{username} = hráč co psal,  {cislo} = obsazené číslo,  {jiny_hrac} = kdo ho zadal dříve",
     },
 }
 
@@ -390,6 +393,12 @@ class BotEngine:
         m = re.findall(r"-?\d+", text)
         return int(m[0]) if m else None
 
+    def _parse_pure_int(self, text: str):
+        """Vrátí int pouze pokud je zpráva čistě celé číslo (max. okolní mezery). Věty s číslem odmítne."""
+        if re.fullmatch(r"\s*-?\d+\s*", text):
+            return int(text.strip())
+        return None
+
     def handle_message(self, sender, content, client_id, client_secret):
         text  = content.strip()
         lower = text.lower()
@@ -442,8 +451,18 @@ class BotEngine:
         # Hráčský odhad
         if self.collecting:
             username = sender.get("username", "???")
-            guess = self.extract_int(text)
+            guess = self._parse_pure_int(text)
             if guess is not None:
+                taken_by = next(
+                    (u for u, g in self.guesses.items() if g == guess and u != username),
+                    None
+                )
+                if taken_by is not None:
+                    self.send_chat(
+                        self._msg("cislo_obsazeno", username=username, cislo=guess, jiny_hrac=taken_by),
+                        client_id, client_secret)
+                    self.log(f"  {username} zkusil {guess} — obsazeno ({taken_by})", "warn")
+                    return
                 prev = self.guesses.get(username)
                 self.guesses[username] = guess
                 if prev is None:
