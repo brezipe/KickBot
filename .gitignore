@@ -1,5 +1,4 @@
 venv/
-dist/
 build/
 *.json
 *.spec
