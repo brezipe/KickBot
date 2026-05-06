@@ -26,7 +26,7 @@ Instalace: pip install customtkinter websocket-client curl_cffi requests
 Spuštění:  python kick_lode_gui.py
 """
 
-import os, sys, json, re, time, hashlib, base64, secrets, webbrowser, threading, random
+import os, sys, json, re, time, hashlib, base64, secrets, webbrowser, threading, random, math
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlencode, urlparse, parse_qs
 from pathlib import Path
@@ -38,7 +38,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "0.1.0"
+BUILD_VERSION = "260502.0502"
 DEBUG = False
 
 KICK_AUTH_URL  = "https://id.kick.com/oauth/authorize"
@@ -48,8 +48,9 @@ KICK_SCOPES    = "user:read chat:write"
 PUSHER_WS      = ("wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
                   "?protocol=7&client=js&version=8.4.0-rc2&flash=false")
 REDIRECT_URI   = "http://localhost:7878/callback"
-TOKEN_FILE     = Path("kick_tokens.json")
-CONFIG_FILE    = Path("kick_lode_config.json")
+TOKEN_FILE          = Path("kick_tokens.json")
+CONFIG_FILE         = Path("kick_lode_config.json")
+LODE_BOT_CONFIG_FILE = Path("lode_bot_config.json")
 
 KICK_GREEN  = "#53FC18"
 DARK_BG     = "#0d0d0d"
@@ -79,6 +80,104 @@ SHIPS_DEF = [
     ("Hlídkový člun", 1,  1),
     ("Hlídkový člun", 1,  1),
 ]
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  Textová konfigurace bota (lode_bot_config.json)
+# ════════════════════════════════════════════════════════════════════════════
+DEFAULT_LODE_CONFIG = {
+    "prikazy": {
+        "start": "!start",
+        "close": "!close",
+        "stop":  "!stop",
+        "mapa":  "!mapa",
+    },
+    "zpravy": {
+        # Standardní hra
+        "bot_online":         "⚓ Lodě bot je online! Moderátor zadá {prikaz_start} pro zahájení registrace. Příkazy: {prikaz_mapa}",
+        "std_zahajena":       "⚓ LODĚ ZAHÁJENA! Mřížka A–J × 1–10. Střílej souřadnicí do chatu, např. A5 nebo J10. Zásah=+1 bod, potopení=bonus. Příkazy: !mapa !skore | Lodě: {lode}",
+        "std_zastavena":      "🛑 Hra zastavena. Výstřelů: {vystrely}, zásahů: {zasahy}, potopeno: {potopeno}/{lodi} lodí.",
+        "std_probiha":        "⚠️ Hra už probíhá! Zastav ji příkazem {prikaz_stop}.",
+        "std_zadna":          "⚠️ Žádná hra neprobíhá.",
+        "std_zasah":          "💥 @{username} zasáhl/a {coord}! +1 bod ({body} celkem)",
+        "std_potopeni":       "🔥 @{username} POTOPIL/A {lod}! +{bonus} bodů bonus! ({body} celkem) Zbývá {zbyva} {lodi_text}.",
+        "std_konec":          "🏆 @{username} POTOPIL/A {lod} a vyhrál/a hru! Všechny lodě jsou na dně! Výstřelů: {vystrely}.",
+        "std_jiz_strileno":   "⚠️ @{username} pole {coord} už střílel/a @{kdo}",
+        "std_zadne_zasahy":   "📊 Zatím nikdo nic nezasáhl.",
+        # Vlastní hra s registrací
+        "vlast_reg_start":    "🎮 Zahajujeme vlastní hru Lodě! Kdo chce hrát, napiš 1 do chatu! Počet hráčů určí velikost herního pole.",
+        "vlast_prihlasen":    "✅ @{username} přihlášen/a! Celkem hráčů: {n}",
+        "vlast_zadni_hraci":  "⚠️ Nikdo se nepřihlásil!",
+        "vlast_reg_uzavrena": "🛑 Registrace uzavřena! Hráčů: {n}. Herní pole: {radky} ({celkem} polí). Moderátor nyní umísťuje loď...",
+        "vlast_hra_start":    "⚓ HRA ZAČÍNÁ! Pořadí: {hraci}. Loď má {pocet_poli} polí. Pole: {radky}. Příkaz {prikaz_mapa} zobrazí mapu.",
+        "vlast_na_rade":      "🎯 @{username} — kde střílíš? (souřadnice, např. A5) [zbývá {zbyva} {zbyvajici_text} lodě]",
+        "vlast_miss":         "💧 @{username} minul/a {coord}.",
+        "vlast_zasah":        "💥 @{username} ZASÁHL/A {coord}! Zbývá {zbyva} {zbyvajici_text} lodě!",
+        "vlast_jiz_strileno": "⚠️ @{username} pole {coord} už bylo stříleno — zkus jiné!",
+        "vlast_konec":        "🏆 @{username} POTOPIL/A loď na {coord} a VYHRÁL/A! Výstřelů: {vystrely}.",
+        "vlast_zastavena":    "🛑 Vlastní hra zastavena moderátorem.",
+    },
+}
+
+LODE_CONFIG_TEMPLATE = {
+    "_komentare": {
+        "popis":    "Konfigurační soubor Kick Lodě Bota",
+        "poznamka": "Proměnné v {složených závorkách} se automaticky dosadí — nemazat je!",
+    },
+    "prikazy": {
+        "_vysvetleni": "Příkazy bota v chatu — změň na cokoliv (musí začínat !). Po změně klikni Načíst změny konfigurace.",
+        **DEFAULT_LODE_CONFIG["prikazy"],
+    },
+    "zpravy": {
+        "_vysvetleni": "Texty které bot píše do chatu. Proměnné v {závorkách} jsou povinné. V textech lze použít {prikaz_start} {prikaz_close} {prikaz_stop} {prikaz_mapa}.",
+        **DEFAULT_LODE_CONFIG["zpravy"],
+    },
+    "_napoveda_promennych": {
+        "std_zahajena":       "{lode} = seznam lodí",
+        "std_zastavena":      "{vystrely} {zasahy} {potopeno} {lodi}",
+        "std_zasah":          "{username} {coord} {body}",
+        "std_potopeni":       "{username} {lod} {bonus} {body} {zbyva} {lodi_text}",
+        "std_konec":          "{username} {lod} {vystrely}",
+        "std_jiz_strileno":   "{username} {coord} {kdo}",
+        "vlast_prihlasen":    "{username} {n}",
+        "vlast_reg_uzavrena": "{n} {radky} {celkem}",
+        "vlast_hra_start":    "{hraci} {pocet_poli} {radky}",
+        "vlast_na_rade":      "{username} {zbyva} {zbyvajici_text}",
+        "vlast_miss":         "{username} {coord}",
+        "vlast_zasah":        "{username} {coord} {zbyva} {zbyvajici_text}",
+        "vlast_jiz_strileno": "{username} {coord}",
+        "vlast_konec":        "{username} {coord} {vystrely}",
+    },
+}
+
+
+def load_lode_config() -> dict:
+    import copy
+    cfg = copy.deepcopy(DEFAULT_LODE_CONFIG)
+    if not LODE_BOT_CONFIG_FILE.exists():
+        try:
+            LODE_BOT_CONFIG_FILE.write_text(
+                json.dumps(LODE_CONFIG_TEMPLATE, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+        except Exception as e:
+            print(f"[WARN] Nelze vytvořit lode_bot_config.json: {e}")
+        return cfg
+    try:
+        user = json.loads(LODE_BOT_CONFIG_FILE.read_text(encoding="utf-8"))
+        if "zpravy" in user and isinstance(user["zpravy"], dict):
+            for k, v in user["zpravy"].items():
+                if not k.startswith("_") and isinstance(v, str):
+                    cfg["zpravy"][k] = v
+        if "prikazy" in user and isinstance(user["prikazy"], dict):
+            for k, v in user["prikazy"].items():
+                if not k.startswith("_") and isinstance(v, str):
+                    cfg["prikazy"][k] = v
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] lode_bot_config.json má chybu: {e} — používám výchozí hodnoty")
+    except Exception as e:
+        print(f"[WARN] Nelze načíst lode_bot_config.json: {e} — používám výchozí hodnoty")
+    return cfg
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -214,21 +313,134 @@ class LodeGame:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+#  Vlastní hra — registrace + ručně umístěná loď + střídání hráčů
+# ════════════════════════════════════════════════════════════════════════════
+class CustomGame:
+    ALL_ROWS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+    IDLE         = "idle"
+    REGISTRATION = "registration"
+    PLACEMENT    = "placement"
+    PLAYING      = "playing"
+    DONE         = "done"
+
+    def __init__(self):
+        self.phase      = self.IDLE
+        self.players    = []       # pořadí registrace
+        self.ship_cells = set()    # (r, c) buňky lodě
+        self.shots      = {}       # (r, c) -> {"hit": bool, "username": str}
+        self.grid_rows  = 10
+        self.grid_cols  = 10
+        self.turn_idx   = 0
+        self.winner     = None
+
+    @property
+    def rows_labels(self) -> str:
+        return self.ALL_ROWS[:self.grid_rows]
+
+    @property
+    def current_player(self):
+        if self.phase != self.PLAYING or not self.players:
+            return None
+        return self.players[self.turn_idx % len(self.players)]
+
+    def start_registration(self):
+        self.phase      = self.REGISTRATION
+        self.players    = []
+        self.ship_cells = set()
+        self.shots      = {}
+        self.turn_idx   = 0
+        self.winner     = None
+
+    def register(self, username: str) -> bool:
+        if username not in self.players:
+            self.players.append(username)
+            return True
+        return False
+
+    def close_registration(self) -> bool:
+        if not self.players:
+            return False
+        total = len(self.players) * 4
+        self.grid_cols = 10
+        self.grid_rows = min(26, max(4, math.ceil(total / 10)))
+        self.phase = self.PLACEMENT
+        return True
+
+    def set_ship_and_start(self, cells: set) -> bool:
+        if not cells:
+            return False
+        self.ship_cells = set(cells)
+        self.phase      = self.PLAYING
+        self.turn_idx   = 0
+        return True
+
+    def parse_coord(self, text: str):
+        rl = self.rows_labels
+        safe = re.escape(rl + rl.lower())
+        m = re.fullmatch(rf"\s*([{safe}])\s*(10|[1-9])\s*", text)
+        if not m:
+            return None
+        r = rl.index(m.group(1).upper())
+        c = int(m.group(2)) - 1
+        return r, c
+
+    def coord_label(self, r: int, c: int) -> str:
+        return f"{self.rows_labels[r]}{c + 1}"
+
+    def shoot(self, username: str, r: int, c: int) -> dict:
+        label = self.coord_label(r, c)
+        if username != self.current_player:
+            return {"type": "not_your_turn", "current": self.current_player}
+        coord = (r, c)
+        if coord in self.shots:
+            return {"type": "already_shot", "coord": label,
+                    "shot_by": self.shots[coord]["username"]}
+        hit = coord in self.ship_cells
+        self.shots[coord] = {"hit": hit, "username": username}
+        self.turn_idx = (self.turn_idx + 1) % len(self.players)
+        if not hit:
+            return {"type": "miss", "coord": label}
+        if all(c2 in self.shots and self.shots[c2]["hit"] for c2 in self.ship_cells):
+            self.winner = username
+            self.phase  = self.DONE
+            return {"type": "game_over", "coord": label}
+        return {"type": "hit", "coord": label}
+
+    def hits_left(self) -> int:
+        return sum(1 for c in self.ship_cells
+                   if not (self.shots.get(c, {}).get("hit")))
+
+    def render_board_chat(self) -> str:
+        rl   = self.rows_labels
+        cols = self.grid_cols
+        lines = ["   " + "".join(str(c % 10) for c in range(1, cols + 1))]
+        for ri in range(self.grid_rows):
+            line = f"{rl[ri]}: "
+            for ci in range(cols):
+                s = self.shots.get((ri, ci))
+                line += ("X" if s["hit"] else "O") if s else "·"
+            lines.append(line)
+        return "\n".join(lines)
+
+
+# ════════════════════════════════════════════════════════════════════════════
 #  Bot engine
 # ════════════════════════════════════════════════════════════════════════════
 class LodeEngine:
-    CMD_START = "!start"
-    CMD_STOP  = "!stop"
-    CMD_MAPA  = "!mapa"
-    CMD_SKORE = "!skore"
 
-    def __init__(self, log_cb, status_cb, board_cb, scores_cb):
-        self.log_cb    = log_cb
-        self.status_cb = status_cb
-        self.board_cb  = board_cb
-        self.scores_cb = scores_cb
+    def __init__(self, log_cb, status_cb, board_cb, scores_cb,
+                 reg_update_cb=None, turn_cb=None, placement_cb=None):
+        self.log_cb        = log_cb
+        self.status_cb     = status_cb
+        self.board_cb      = board_cb
+        self.scores_cb     = scores_cb
+        self.reg_update_cb = reg_update_cb  # (players: list) -> None
+        self.turn_cb       = turn_cb        # (current_player: str) -> None
+        self.placement_cb  = placement_cb   # () -> None  — GUI otevře dialog
 
         self.game           = LodeGame()
+        self.cgame          = CustomGame()
         self.broadcaster_id = 0
         self.chatroom_id    = 0
         self.ws             = None
@@ -237,6 +449,44 @@ class LodeEngine:
 
         self.tokens = {"access_token": "", "refresh_token": "", "expires_at": 0}
         self._load_tokens()
+        self.bcfg = load_lode_config()
+        self._load_commands()
+
+    def _load_commands(self):
+        p = self.bcfg.get("prikazy", {})
+        self.CMD_START = p.get("start", "!start").strip().lower()
+        self.CMD_CLOSE = p.get("close", "!close").strip().lower()
+        self.CMD_STOP  = p.get("stop",  "!stop").strip().lower()
+        self.CMD_MAPA  = p.get("mapa",  "!mapa").strip().lower()
+
+    def reload_config(self):
+        self.bcfg = load_lode_config()
+        self._load_commands()
+        self.log("✅ lode_bot_config.json znovu načten.", "success")
+
+    def _msg(self, key: str, **kwargs) -> str:
+        template = self.bcfg["zpravy"].get(key, f"[{key}]")
+        p = self.bcfg.get("prikazy", {})
+        try:
+            return template.format(
+                prikaz_start=p.get("start", "!start"),
+                prikaz_close=p.get("close", "!close"),
+                prikaz_stop=p.get("stop",  "!stop"),
+                prikaz_mapa=p.get("mapa",  "!mapa"),
+                **kwargs,
+            )
+        except (KeyError, ValueError):
+            return template
+
+    @staticmethod
+    def _pole_text(n: int) -> str:
+        return "pole" if n == 1 else "polí"
+
+    @staticmethod
+    def _lodi_text(n: int) -> str:
+        if n == 1:   return "loď"
+        if n <= 4:   return "lodě"
+        return "lodí"
 
     # ── Tokeny ───────────────────────────────────────────────────────────────
     def _load_tokens(self):
@@ -396,36 +646,165 @@ class LodeEngine:
         lower    = text.lower()
         username = sender.get("username", "???")
 
+        # ── Příkazy moderátora (fungují z jakékoliv fáze) ────────────────────
         if self.is_moderator(sender):
             if lower == self.CMD_START:
-                if self.game.active:
-                    self.send_chat("⚠️ Hra už probíhá! Zastav ji příkazem !stop.", client_id, client_secret)
+                if self.cgame.phase not in (CustomGame.IDLE, CustomGame.DONE):
+                    self.send_chat(self._msg("std_probiha"), client_id, client_secret)
                 else:
-                    self._start_game(client_id, client_secret)
+                    self.custom_start_registration(client_id, client_secret)
+                return
+            if lower == self.CMD_CLOSE:
+                if self.cgame.phase == CustomGame.REGISTRATION:
+                    self.custom_close_registration(client_id, client_secret)
                 return
             if lower == self.CMD_STOP:
-                if not self.game.active:
-                    self.send_chat("⚠️ Žádná hra neprobíhá.", client_id, client_secret)
+                if self.cgame.phase == CustomGame.IDLE:
+                    self.send_chat(self._msg("std_zadna"), client_id, client_secret)
                 else:
-                    self._stop_game(client_id, client_secret)
+                    self.custom_stop_game(client_id, client_secret)
                 return
 
-        if lower == self.CMD_MAPA:
-            if self.game.active or self.game.finished:
-                self.send_chat(self.game.render_board_chat(), client_id, client_secret)
-            else:
-                self.send_chat("⚠️ Žádná hra neprobíhá. Moderátor zadá !start.", client_id, client_secret)
+        # ── Vlastní hra: registrace ──────────────────────────────────────────
+        if self.cgame.phase == CustomGame.REGISTRATION:
+            if text == "1":
+                if self.cgame.register(username):
+                    n = len(self.cgame.players)
+                    self.log(f"  {username} se přihlásil/a ({n}. hráč)", "info")
+                    self.send_chat(self._msg("vlast_prihlasen", username=username, n=n),
+                                   client_id, client_secret)
+                    if self.reg_update_cb:
+                        self.reg_update_cb(list(self.cgame.players))
             return
 
-        if lower == self.CMD_SKORE:
-            self._send_scores(client_id, client_secret)
-            return
-
-        if self.game.active:
-            coord = self.game.parse_coord(text)
+        # ── Vlastní hra: střelba na střídačku ───────────────────────────────
+        if self.cgame.phase == CustomGame.PLAYING:
+            if lower == self.CMD_MAPA:
+                self.send_chat(self.cgame.render_board_chat(), client_id, client_secret)
+                return
+            coord = self.cgame.parse_coord(text)
             if coord is not None:
-                result = self.game.shoot(username, *coord)
-                self._handle_result(result, username, client_id, client_secret)
+                result = self.cgame.shoot(username, *coord)
+                self._handle_custom_result(result, username, client_id, client_secret)
+            return
+
+        # ── Po skončení hry — !mapa ukáže výslednou mapu ────────────────────
+        if lower == self.CMD_MAPA and self.cgame.phase == CustomGame.DONE:
+            self.send_chat(self.cgame.render_board_chat(), client_id, client_secret)
+
+    # ── Vlastní hra — engine metody ───────────────────────────────────────────
+    def custom_start_registration(self, client_id, client_secret):
+        self.cgame.start_registration()
+        self.log("📋 Registrace zahájena", "info")
+        self.status_cb("registration")
+        if self.reg_update_cb:
+            self.reg_update_cb([])
+        self.send_chat(self._msg("vlast_reg_start"), client_id, client_secret)
+
+    def custom_close_registration(self, client_id, client_secret) -> bool:
+        if not self.cgame.close_registration():
+            self.send_chat(self._msg("vlast_zadni_hraci"), client_id, client_secret)
+            return False
+        n    = len(self.cgame.players)
+        rows = self.cgame.grid_rows
+        cols = self.cgame.grid_cols
+        rl   = self.cgame.rows_labels
+        self.log(f"📋 Registrace uzavřena. {n} hráčů, pole {rows}×{cols}", "success")
+        self.status_cb("placement")
+        self.send_chat(
+            self._msg("vlast_reg_uzavrena", n=n,
+                      radky=f"{rl[0]}–{rl[-1]} × 1–{cols}",
+                      celkem=rows * cols),
+            client_id, client_secret
+        )
+        return True
+
+    def custom_start_game(self, cells: set, client_id, client_secret) -> bool:
+        if not self.cgame.set_ship_and_start(cells):
+            return False
+        first = self.cgame.current_player
+        rl    = self.cgame.rows_labels
+        self.log(f"▶ Vlastní hra zahájena. Loď má {len(cells)} polí.", "success")
+        self.status_cb("custom_playing")
+        self.board_cb(self.cgame)
+        self.send_chat(
+            self._msg("vlast_hra_start",
+                      hraci=" → ".join(self.cgame.players),
+                      pocet_poli=len(cells),
+                      radky=f"{rl[0]}–{rl[-1]} × 1–{self.cgame.grid_cols}"),
+            client_id, client_secret
+        )
+        self._ask_next(first, client_id, client_secret)
+        return True
+
+    def custom_stop_game(self, client_id, client_secret):
+        self.cgame.phase = CustomGame.IDLE
+        self.log("⏹ Vlastní hra zastavena", "warn")
+        self.status_cb("idle")
+        self.send_chat(self._msg("vlast_zastavena"), client_id, client_secret)
+        if self.reg_update_cb:
+            self.reg_update_cb([])
+
+    def _ask_next(self, player, client_id, client_secret):
+        left = self.cgame.hits_left()
+        self.send_chat(
+            self._msg("vlast_na_rade", username=player, zbyva=left,
+                      zbyvajici_text=self._pole_text(left)),
+            client_id, client_secret
+        )
+        if self.turn_cb:
+            self.turn_cb(player)
+
+    def _handle_custom_result(self, result, username, client_id, client_secret):
+        t = result["type"]
+
+        if t == "not_your_turn":
+            return
+
+        if t == "already_shot":
+            self.send_chat(
+                self._msg("vlast_jiz_strileno", username=username, coord=result["coord"]),
+                client_id, client_secret
+            )
+            self._ask_next(self.cgame.current_player, client_id, client_secret)
+            return
+
+        coord = result["coord"]
+
+        if t == "miss":
+            self.log(f"  {username} → {coord} — minul/a", "dim")
+            self.send_chat(self._msg("vlast_miss", username=username, coord=coord),
+                           client_id, client_secret)
+
+        elif t == "hit":
+            left = self.cgame.hits_left()
+            self.log(f"  {username} → {coord} — ZÁSAH! (zbývá {left})", "info")
+            self.send_chat(
+                self._msg("vlast_zasah", username=username, coord=coord,
+                          zbyva=left, zbyvajici_text=self._pole_text(left)),
+                client_id, client_secret
+            )
+
+        elif t == "game_over":
+            self.log(f"  {username} → {coord} — POTOPIL/A! KONEC HRY!", "success")
+            self.cgame.phase = CustomGame.DONE
+            self.status_cb("done")
+            self.board_cb(self.cgame)
+            self.send_chat(
+                self._msg("vlast_konec", username=username, coord=coord,
+                          vystrely=len(self.cgame.shots)),
+                client_id, client_secret
+            )
+            if self.reg_update_cb:
+                self.reg_update_cb(list(self.cgame.players))
+            return
+
+        self.board_cb(self.cgame)
+        next_p = self.cgame.current_player
+        if next_p:
+            self._ask_next(next_p, client_id, client_secret)
+        if self.turn_cb:
+            self.turn_cb(next_p or "")
 
     def _start_game(self, client_id, client_secret):
         try:
@@ -437,17 +816,9 @@ class LodeEngine:
         self.status_cb("playing")
         self.board_cb(self.game)
         self.scores_cb([])
-        ships_str = " | ".join(
-            f"{s['name']} ({s['size']}p +{s['bonus']}b)" for s in self.game.ships
-        )
-        self.send_chat(
-            f"⚓ LODĚ ZAHÁJENA! Mřížka A–J × 1–10. "
-            f"Střílej souřadnicí do chatu, např. A5 nebo J10. "
-            f"Zásah=+1 bod, potopení=bonus. "
-            f"Příkazy: !mapa !skore | "
-            f"Lodě: {ships_str}",
-            client_id, client_secret
-        )
+        lode_str = " | ".join(f"{s['name']} ({s['size']}p +{s['bonus']}b)"
+                              for s in self.game.ships)
+        self.send_chat(self._msg("std_zahajena", lode=lode_str), client_id, client_secret)
 
     def _stop_game(self, client_id, client_secret):
         self.game.active = False
@@ -455,9 +826,8 @@ class LodeEngine:
         self.log(f"⏹ Hra zastavena. Výstřelů: {st['total']}, zásahů: {st['hits']}", "warn")
         self.status_cb("idle")
         self.send_chat(
-            f"🛑 Hra zastavena moderátorem. "
-            f"Výstřelů: {st['total']}, zásahů: {st['hits']}, "
-            f"potopeno: {st['sunk']}/{st['ships']} lodí.",
+            self._msg("std_zastavena", vystrely=st["total"], zasahy=st["hits"],
+                      potopeno=st["sunk"], lodi=st["ships"]),
             client_id, client_secret
         )
         self._send_scores(client_id, client_secret)
@@ -468,7 +838,8 @@ class LodeEngine:
 
         if t == "already_shot":
             self.send_chat(
-                f"⚠️ @{username} pole {coord} už střílel/a @{result['shot_by']}",
+                self._msg("std_jiz_strileno", username=username, coord=coord,
+                          kdo=result["shot_by"]),
                 client_id, client_secret
             )
             return
@@ -478,38 +849,33 @@ class LodeEngine:
 
         if t == "miss":
             self.log(f"  {username} → {coord} — minul/a", "dim")
-            # Miss se v chatu neoznamuje — chat by byl přeplněný při 40 hráčích
 
         elif t == "hit":
             pts = self.game.scores.get(username, 0)
             self.log(f"  {username} → {coord} — ZÁSAH! ({pts} b)", "info")
-            self.send_chat(
-                f"💥 @{username} zasáhl/a {coord}! +1 bod ({pts} celkem)",
-                client_id, client_secret
-            )
+            self.send_chat(self._msg("std_zasah", username=username, coord=coord, body=pts),
+                           client_id, client_secret)
 
         elif t == "sunk":
             ship = result["ship"]
             pts  = self.game.scores.get(username, 0)
             rem  = len(self.game.remaining_ships())
-            suffix = "loď" if rem == 1 else ("lodě" if 2 <= rem <= 4 else "lodí")
             self.log(f"  {username} → POTOPIL/A {ship['name']}! ({pts} b)", "success")
             self.send_chat(
-                f"🔥 @{username} POTOPIL/A {ship['name'].upper()}! "
-                f"+{ship['bonus']} bonusových bodů! ({pts} celkem) "
-                f"Zbývá {rem} {suffix}.",
+                self._msg("std_potopeni", username=username, lod=ship["name"].upper(),
+                          bonus=ship["bonus"], body=pts, zbyva=rem,
+                          lodi_text=self._lodi_text(rem)),
                 client_id, client_secret
             )
 
         elif t == "game_over":
             ship = result["ship"]
-            pts  = self.game.scores.get(username, 0)
             st   = self.game.stats()
             self.log(f"  {username} → POTOPIL/A poslední loď! KONEC HRY!", "success")
             self.status_cb("done")
             self.send_chat(
-                f"🏆 @{username} POTOPIL/A {ship['name'].upper()} a vyhrál/a hru! "
-                f"Všechny lodě jsou na dně! Celkem výstřelů: {st['total']}.",
+                self._msg("std_konec", username=username, lod=ship["name"].upper(),
+                          vystrely=st["total"]),
                 client_id, client_secret
             )
             self._send_scores(client_id, client_secret)
@@ -517,7 +883,7 @@ class LodeEngine:
     def _send_scores(self, client_id, client_secret):
         top = self.game.top_scores(10)
         if not top:
-            self.send_chat("📊 Zatím nikdo nic nezasáhl.", client_id, client_secret)
+            self.send_chat(self._msg("std_zadne_zasahy"), client_id, client_secret)
             return
         medals = ["🥇", "🥈", "🥉"] + ["  "] * 10
         parts  = [f"{medals[i]} {u}: {p}b" for i, (u, p) in enumerate(top)]
@@ -539,11 +905,7 @@ class LodeEngine:
             self.log("✅ Připojeno k chatu!", "success")
             self.running = True
             self.status_cb("idle")
-            self.send_chat(
-                "⚓ Lodě bot je online! Moderátor zadá !start pro zahájení hry. "
-                "Příkazy: !mapa !skore",
-                client_id, client_secret
-            )
+            self.send_chat(self._msg("bot_online"), client_id, client_secret)
             on_connected(True)
 
         def on_msg(ws, raw):
@@ -588,6 +950,162 @@ class LodeEngine:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+#  Dialog pro umístění lodě moderátorem
+# ════════════════════════════════════════════════════════════════════════════
+class ShipPlacementDialog(ctk.CTkToplevel):
+    CELL_SIZE = 28
+
+    # (label, offsets from anchor = leftmost cell of the horizontal bar)
+    # Shape: XXX + one cell up/down at left or right end
+    SHAPES = [
+        ("↑ vlevo",  [( 0,0),(0,1),(0,2),(-1,0)]),  # X·· / XXX
+        ("↓ vlevo",  [( 0,0),(0,1),(0,2),( 1,0)]),  # XXX / X··
+        ("↑ vpravo", [( 0,0),(0,1),(0,2),(-1,2)]),  # ··X / XXX
+        ("↓ vpravo", [( 0,0),(0,1),(0,2),( 1,2)]),  # XXX / ··X
+    ]
+
+    def __init__(self, parent, cgame: CustomGame, on_confirm):
+        super().__init__(parent)
+        self.cgame      = cgame
+        self.on_confirm = on_confirm
+        self.anchor     = None   # (r, c) – leftmost cell of horizontal bar
+        self.shape_idx  = 0
+
+        rows = cgame.grid_rows
+        cols = cgame.grid_cols
+        rl   = cgame.rows_labels
+
+        w = max(cols * self.CELL_SIZE + 80, 400)
+        h = rows * self.CELL_SIZE + 220
+        self.title("Umístění L-lodě")
+        self.geometry(f"{w}x{h}")
+        self.resizable(False, False)
+        self.configure(fg_color=DARK_BG)
+        self.grab_set()
+
+        ctk.CTkLabel(self,
+            text="1. Vyber orientaci  2. Klikni na mřížce (levý kraj XXX)",
+            font=ctk.CTkFont("", 12, "bold"), text_color=TEXT_BRIGHT
+        ).pack(pady=(16, 8))
+
+        # Shape selector
+        shape_row = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=6)
+        shape_row.pack(pady=(0, 6), padx=16, fill="x")
+        self._shape_btns = []
+        for i, (name, _) in enumerate(self.SHAPES):
+            btn = ctk.CTkButton(
+                shape_row, text=f"L {name}",
+                fg_color=KICK_GREEN if i == 0 else "transparent",
+                text_color="#000" if i == 0 else TEXT_MID,
+                hover_color="#45d614",
+                border_color=BORDER, border_width=1,
+                font=ctk.CTkFont("", 11, "bold"), height=30, corner_radius=4,
+                command=lambda idx=i: self._select_shape(idx)
+            )
+            btn.pack(side="left", padx=4, pady=6, expand=True, fill="x")
+            self._shape_btns.append(btn)
+
+        self.lbl_status = ctk.CTkLabel(self,
+            text="Klikni na mřížce na levý kraj horizontální části lodě",
+            font=ctk.CTkFont("", 11), text_color=TEXT_DIM)
+        self.lbl_status.pack(pady=(0, 6))
+
+        # Grid
+        grid_frame = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=8)
+        grid_frame.pack(padx=16, fill="both", expand=True)
+
+        ctk.CTkLabel(grid_frame, text="  ", width=28, fg_color="transparent"
+                     ).grid(row=0, column=0)
+        for ci in range(cols):
+            ctk.CTkLabel(grid_frame,
+                text=str(ci + 1) if ci < 9 else "10",
+                width=self.CELL_SIZE, font=ctk.CTkFont("Courier New", 10),
+                text_color=TEXT_DIM, fg_color="transparent"
+            ).grid(row=0, column=ci + 1, padx=1)
+
+        self._btns = {}
+        for ri in range(rows):
+            ctk.CTkLabel(grid_frame, text=rl[ri], width=28,
+                font=ctk.CTkFont("Courier New", 10, "bold"),
+                text_color=TEXT_DIM, fg_color="transparent"
+            ).grid(row=ri + 1, column=0)
+            for ci in range(cols):
+                btn = tk.Button(
+                    grid_frame,
+                    text="", width=2, height=1,
+                    bg=PANEL_BG, activebackground=KICK_GREEN,
+                    relief="flat", bd=1, highlightbackground=BORDER,
+                    cursor="hand2",
+                    command=lambda r=ri, c=ci: self._set_anchor(r, c)
+                )
+                btn.grid(row=ri + 1, column=ci + 1, padx=1, pady=1, ipadx=2, ipady=2)
+                self._btns[(ri, ci)] = btn
+
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(pady=10, fill="x", padx=16)
+        btn_row.grid_columnconfigure(0, weight=1)
+        btn_row.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkButton(btn_row, text="Zrušit",
+            fg_color="transparent", border_color=BORDER, border_width=1,
+            text_color=TEXT_MID, hover_color=CARD_BG,
+            command=self.destroy
+        ).grid(row=0, column=0, padx=(0, 6), sticky="ew")
+
+        self.btn_confirm = ctk.CTkButton(btn_row, text="✅  Spustit hru",
+            fg_color=KICK_GREEN, text_color="#000", hover_color="#45d614",
+            font=ctk.CTkFont("", 12, "bold"), state="disabled",
+            command=self._confirm)
+        self.btn_confirm.grid(row=0, column=1, padx=(6, 0), sticky="ew")
+
+    def _select_shape(self, idx):
+        self.shape_idx = idx
+        for i, btn in enumerate(self._shape_btns):
+            sel = (i == idx)
+            btn.configure(
+                fg_color=KICK_GREEN if sel else "transparent",
+                text_color="#000" if sel else TEXT_MID,
+            )
+        if self.anchor is not None:
+            self._set_anchor(*self.anchor)
+
+    def _get_cells(self, anchor_r, anchor_c):
+        return [(anchor_r + dr, anchor_c + dc)
+                for dr, dc in self.SHAPES[self.shape_idx][1]]
+
+    def _cells_valid(self, cells):
+        return all(0 <= r < self.cgame.grid_rows and 0 <= c < self.cgame.grid_cols
+                   for r, c in cells)
+
+    def _set_anchor(self, r, c):
+        for btn in self._btns.values():
+            btn.config(bg=PANEL_BG)
+        self.anchor = (r, c)
+        cells = self._get_cells(r, c)
+        valid = self._cells_valid(cells)
+        for cr, cc in cells:
+            if 0 <= cr < self.cgame.grid_rows and 0 <= cc < self.cgame.grid_cols:
+                self._btns[(cr, cc)].config(bg=KICK_GREEN if valid else "#663300")
+        if valid:
+            rl = self.cgame.rows_labels
+            coords = ", ".join(f"{rl[cr]}{cc + 1}" for cr, cc in cells)
+            self.lbl_status.configure(text=f"Loď: {coords}", text_color=KICK_GREEN)
+            self.btn_confirm.configure(state="normal")
+        else:
+            self.lbl_status.configure(
+                text="⚠️ Loď přesahuje mřížku — zvol jiné místo",
+                text_color=RED_ERR)
+            self.btn_confirm.configure(state="disabled")
+
+    def _confirm(self):
+        if self.anchor is not None and self.btn_confirm.cget("state") == "normal":
+            cells = self._get_cells(*self.anchor)
+            if self._cells_valid(cells):
+                self.on_confirm(set(cells))
+                self.destroy()
+
+
+# ════════════════════════════════════════════════════════════════════════════
 #  GUI
 # ════════════════════════════════════════════════════════════════════════════
 class App(ctk.CTk):
@@ -600,10 +1118,12 @@ class App(ctk.CTk):
 
         self._load_config()
         self.engine = LodeEngine(
-            log_cb    = self._append_log,
-            status_cb = self._set_status,
-            board_cb  = self._update_board,
-            scores_cb = self._update_scores,
+            log_cb        = self._append_log,
+            status_cb     = self._set_status,
+            board_cb      = self._update_board,
+            scores_cb     = self._update_scores,
+            reg_update_cb = self._update_reg_list,
+            turn_cb       = self._update_turn,
         )
         self._token_status = (
             "valid"   if self.engine._token_valid() else
@@ -642,26 +1162,34 @@ class App(ctk.CTk):
         sb.grid(row=0, column=0, sticky="nsew")
         sb.grid_propagate(False)
         sb.grid_columnconfigure(0, weight=1)
+        sb.grid_rowconfigure(0, weight=1)
 
-        ctk.CTkLabel(sb, text="⚓ Lodě Bot", font=ctk.CTkFont("", 22, "bold"),
+        # Scrollovatelný vnitřní panel — obsah se vejde i na malém okně
+        inner = ctk.CTkScrollableFrame(sb, fg_color="transparent",
+                                       scrollbar_button_color=BORDER,
+                                       scrollbar_button_hover_color=TEXT_DIM)
+        inner.grid(row=0, column=0, sticky="nsew")
+        inner.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(inner, text="⚓ Lodě Bot", font=ctk.CTkFont("", 22, "bold"),
                      text_color=KICK_GREEN).grid(row=0, column=0, padx=24, pady=(28, 4), sticky="w")
-        ctk.CTkLabel(sb, text="Multiplayer pro 40 hráčů", font=ctk.CTkFont("", 11),
+        ctk.CTkLabel(inner, text="Multiplayer pro 40 hráčů", font=ctk.CTkFont("", 11),
                      text_color=TEXT_DIM).grid(row=1, column=0, padx=24, pady=(0, 24), sticky="w")
-        ctk.CTkFrame(sb, height=1, fg_color=BORDER).grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 20))
+        ctk.CTkFrame(inner, height=1, fg_color=BORDER).grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 20))
 
-        self._section(sb, "NASTAVENÍ", 3)
-        self._label(sb, "Client ID", 4)
-        self.entry_cid = self._entry(sb, 5, self._cfg["client_id"])
-        self._label(sb, "Client Secret", 6)
-        self.entry_csecret = self._entry(sb, 7, self._cfg["client_secret"], show="•")
-        self._label(sb, "Název kanálu (slug)", 8)
-        self.entry_channel = self._entry(sb, 9, self._cfg["channel"])
+        self._section(inner, "NASTAVENÍ", 3)
+        self._label(inner, "Client ID", 4)
+        self.entry_cid = self._entry(inner, 5, self._cfg["client_id"])
+        self._label(inner, "Client Secret", 6)
+        self.entry_csecret = self._entry(inner, 7, self._cfg["client_secret"], show="•")
+        self._label(inner, "Název kanálu (slug)", 8)
+        self.entry_channel = self._entry(inner, 9, self._cfg["channel"])
 
-        self.lbl_token = ctk.CTkLabel(sb, text="", font=ctk.CTkFont("", 11),
+        self.lbl_token = ctk.CTkLabel(inner, text="", font=ctk.CTkFont("", 11),
                                       wraplength=210, justify="left")
         self.lbl_token.grid(row=10, column=0, padx=16, pady=(8, 4), sticky="w")
 
-        auth_row = ctk.CTkFrame(sb, fg_color="transparent")
+        auth_row = ctk.CTkFrame(inner, fg_color="transparent")
         auth_row.grid(row=11, column=0, padx=16, pady=(4, 16), sticky="ew")
         auth_row.grid_columnconfigure(0, weight=1)
         auth_row.grid_columnconfigure(1, weight=0)
@@ -680,39 +1208,40 @@ class App(ctk.CTk):
             command=self._do_login_reset)
         self.btn_reset_login.grid(row=0, column=1, sticky="e")
 
-        ctk.CTkFrame(sb, height=1, fg_color=BORDER).grid(row=12, column=0, sticky="ew", padx=16, pady=(0, 20))
+        ctk.CTkFrame(inner, height=1, fg_color=BORDER).grid(row=12, column=0, sticky="ew", padx=16, pady=(0, 20))
 
-        self._section(sb, "PŘIPOJENÍ", 13)
-        self.btn_connect = ctk.CTkButton(sb, text="▶  Spustit bota",
+        self._section(inner, "PŘIPOJENÍ", 13)
+        self.btn_connect = ctk.CTkButton(inner, text="▶  Spustit bota",
             fg_color=KICK_GREEN, hover_color="#45d614", text_color="#000",
             font=ctk.CTkFont("", 13, "bold"), height=44, corner_radius=8,
             command=self._do_connect)
         self.btn_connect.grid(row=14, column=0, padx=16, pady=(8, 6), sticky="ew")
 
-        self.btn_disconnect = ctk.CTkButton(sb, text="⏹  Odpojit",
+        self.btn_disconnect = ctk.CTkButton(inner, text="⏹  Odpojit",
             fg_color="#2a1a1a", hover_color="#3a2020", text_color="#ff6666",
             border_color="#ff4444", border_width=1,
             font=ctk.CTkFont("", 12), height=36, corner_radius=8,
             state="disabled", command=self._do_disconnect)
         self.btn_disconnect.grid(row=15, column=0, padx=16, pady=(0, 8), sticky="ew")
 
-        self.lbl_status = ctk.CTkLabel(sb, text="⚪ Odpojeno",
+        self.lbl_status = ctk.CTkLabel(inner, text="⚪ Odpojeno",
             font=ctk.CTkFont("", 11), text_color=TEXT_DIM)
         self.lbl_status.grid(row=16, column=0, padx=16, pady=(0, 8), sticky="w")
 
-        ctk.CTkFrame(sb, height=1, fg_color=BORDER).grid(row=17, column=0, sticky="ew", padx=16, pady=(4, 16))
+        ctk.CTkFrame(inner, height=1, fg_color=BORDER).grid(row=17, column=0, sticky="ew", padx=16, pady=(4, 16))
 
         # Pravidla — rychlý přehled
-        self._section(sb, "PŘÍKAZY V CHATU", 18)
+        self._section(inner, "PŘÍKAZY V CHATU", 18)
         rules = [
-            ("!start",  "mod — zahájit hru"),
+            ("!start",  "mod — zahájit registraci"),
+            ("!close",  "mod — uzavřít registraci"),
             ("!stop",   "mod — zastavit hru"),
             ("!mapa",   "zobrazit mapu"),
-            ("!skore",  "žebříček"),
-            ("A5, J10", "hráč — střelba"),
+            ("1",       "hráč — přihlásit se do hry"),
+            ("A5, B3",  "hráč — střelba (na tahu)"),
         ]
         for i, (cmd, desc) in enumerate(rules):
-            rf = ctk.CTkFrame(sb, fg_color="transparent")
+            rf = ctk.CTkFrame(inner, fg_color="transparent")
             rf.grid(row=19 + i, column=0, padx=16, pady=1, sticky="ew")
             rf.grid_columnconfigure(1, weight=1)
             ctk.CTkLabel(rf, text=cmd, font=ctk.CTkFont("Courier New", 11, "bold"),
@@ -722,25 +1251,42 @@ class App(ctk.CTk):
                          text_color=TEXT_DIM, anchor="w"
                          ).grid(row=0, column=1, padx=(6, 0), sticky="w")
 
-        sb.grid_rowconfigure(25, weight=1)
+        ctk.CTkFrame(inner, height=1, fg_color=BORDER).grid(row=24, column=0, sticky="ew", padx=16, pady=(12, 8))
 
-        ctk.CTkButton(sb, text="❓ Kick Developer Settings",
+        self._section(inner, "TEXTY BOTA", 25)
+        ctk.CTkButton(inner, text="✏️  Upravit texty",
+            fg_color="transparent", hover_color=CARD_BG, text_color=TEXT_MID,
+            border_color=BORDER, border_width=1,
+            font=ctk.CTkFont("", 11), height=32, corner_radius=6,
+            command=self._open_bot_config
+        ).grid(row=26, column=0, padx=16, pady=(4, 4), sticky="ew")
+
+        ctk.CTkButton(inner, text="🔄  Načíst změny konfigurace",
+            fg_color="transparent", hover_color=CARD_BG, text_color=TEXT_MID,
+            border_color=BORDER, border_width=1,
+            font=ctk.CTkFont("", 11), height=32, corner_radius=6,
+            command=self._reload_bot_config
+        ).grid(row=27, column=0, padx=16, pady=(0, 8), sticky="ew")
+
+        ctk.CTkFrame(inner, height=1, fg_color=BORDER).grid(row=28, column=0, sticky="ew", padx=16, pady=(4, 8))
+
+        ctk.CTkButton(inner, text="❓ Kick Developer Settings",
             fg_color="transparent", hover_color=CARD_BG, text_color=TEXT_DIM,
             font=ctk.CTkFont("", 11), height=28, anchor="w",
             command=lambda: webbrowser.open("https://kick.com/settings/developer")
-        ).grid(row=26, column=0, padx=16, pady=(0, 16), sticky="ew")
+        ).grid(row=29, column=0, padx=16, pady=(0, 16), sticky="ew")
 
     def _build_main(self):
         main = ctk.CTkFrame(self, fg_color=DARK_BG, corner_radius=0)
         main.grid(row=0, column=1, sticky="nsew", padx=(1, 0))
         main.grid_columnconfigure(0, weight=3)
         main.grid_columnconfigure(1, weight=2)
-        main.grid_rowconfigure(1, weight=1)
-        main.grid_rowconfigure(3, weight=1)
+        main.grid_rowconfigure(1, weight=2)
+        main.grid_rowconfigure(2, weight=1)
 
         # Banner
         self.banner = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12, height=64)
-        self.banner.grid(row=0, column=0, columnspan=2, sticky="ew", padx=20, pady=(20, 12))
+        self.banner.grid(row=0, column=0, columnspan=2, sticky="ew", padx=20, pady=(20, 8))
         self.banner.grid_propagate(False)
         self.banner.grid_columnconfigure(1, weight=1)
         self.banner_icon = ctk.CTkLabel(self.banner, text="⚓", font=ctk.CTkFont("", 28))
@@ -753,11 +1299,13 @@ class App(ctk.CTk):
             font=ctk.CTkFont("", 11), text_color=TEXT_DIM, anchor="e")
         self.banner_sub.grid(row=0, column=2, padx=20, sticky="e")
 
-        # Herní mřížka
+        # Herní mřížka (levý panel)
         bf = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12)
-        bf.grid(row=1, column=0, sticky="nsew", padx=(20, 6), pady=(0, 12))
+        bf.grid(row=1, column=0, sticky="nsew", padx=(20, 6), pady=(0, 8))
         bf.grid_columnconfigure(0, weight=1)
-        bf.grid_rowconfigure(1, weight=1)
+        bf.grid_rowconfigure(1, weight=2)
+        bf.grid_rowconfigure(4, weight=1)
+
         bh = ctk.CTkFrame(bf, fg_color="transparent")
         bh.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 4))
         bh.grid_columnconfigure(1, weight=1)
@@ -769,7 +1317,7 @@ class App(ctk.CTk):
         self.lbl_shots.grid(row=0, column=1, sticky="e")
 
         board_container = ctk.CTkFrame(bf, fg_color="transparent")
-        board_container.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        board_container.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
 
         self.board_text = tk.Text(
             board_container,
@@ -787,36 +1335,92 @@ class App(ctk.CTk):
         self.board_text.tag_configure("rowlbl",  foreground=TEXT_DIM)
         self.board_text.tag_configure("sunk",    foreground="#ff8800")
 
-        # Panel lodí + žebříček
+        ctk.CTkFrame(bf, height=1, fg_color=BORDER).grid(
+            row=2, column=0, sticky="ew", padx=12, pady=(0, 6))
+
+        shot_hdr = ctk.CTkFrame(bf, fg_color="transparent")
+        shot_hdr.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 4))
+        shot_hdr.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(shot_hdr, text="Výstřely",
+            font=ctk.CTkFont("", 12, "bold"), text_color=TEXT_BRIGHT
+        ).grid(row=0, column=0, sticky="w")
+        self.lbl_shot_count = ctk.CTkLabel(shot_hdr, text="",
+            font=ctk.CTkFont("", 11), text_color=TEXT_DIM)
+        self.lbl_shot_count.grid(row=0, column=1, sticky="e")
+
+        self.shot_scroll = ctk.CTkScrollableFrame(bf, fg_color="transparent",
+            scrollbar_button_color=BORDER)
+        self.shot_scroll.grid(row=4, column=0, sticky="nsew", padx=6, pady=(0, 10))
+        self.shot_scroll.grid_columnconfigure(0, weight=1)
+        self._shot_rows = []
+
+        # Pravý panel — ovládání hry + hráči
         rf = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12)
-        rf.grid(row=1, column=1, sticky="nsew", padx=(6, 20), pady=(0, 12))
+        rf.grid(row=1, column=1, sticky="nsew", padx=(6, 20), pady=(0, 8))
         rf.grid_columnconfigure(0, weight=1)
-        rf.grid_rowconfigure(1, weight=1)
-        rf.grid_rowconfigure(3, weight=1)
+        rf.grid_rowconfigure(9, weight=1)
 
-        ctk.CTkLabel(rf, text="Lodě", font=ctk.CTkFont("", 13, "bold"),
-                     text_color=TEXT_BRIGHT
-                     ).grid(row=0, column=0, padx=14, pady=(14, 4), sticky="w")
-        self.ships_scroll = ctk.CTkScrollableFrame(rf, fg_color="transparent",
-                                                    scrollbar_button_color=BORDER, height=120)
-        self.ships_scroll.grid(row=1, column=0, sticky="nsew", padx=6, pady=(0, 6))
-        self.ships_scroll.grid_columnconfigure(0, weight=1)
-        self._ship_rows = []
+        ctk.CTkLabel(rf, text="OVLÁDÁNÍ HRY",
+            font=ctk.CTkFont("", 10, "bold"), text_color=TEXT_DIM
+        ).grid(row=0, column=0, padx=14, pady=(14, 6), sticky="w")
 
-        ctk.CTkFrame(rf, height=1, fg_color=BORDER).grid(row=2, column=0, sticky="ew", padx=14)
+        self.btn_reg_start = ctk.CTkButton(rf, text="🎮  Zahájit registraci",
+            fg_color="#1a2a3a", hover_color="#223344", text_color="#66aaff",
+            border_color="#336699", border_width=1,
+            font=ctk.CTkFont("", 13, "bold"), height=40, corner_radius=8,
+            command=self._do_custom_reg_start)
+        self.btn_reg_start.grid(row=1, column=0, padx=12, pady=(0, 5), sticky="ew")
 
-        ctk.CTkLabel(rf, text="Žebříček", font=ctk.CTkFont("", 13, "bold"),
-                     text_color=TEXT_BRIGHT
-                     ).grid(row=2, column=0, padx=14, pady=(10, 4), sticky="w")
-        self.scores_scroll = ctk.CTkScrollableFrame(rf, fg_color="transparent",
-                                                     scrollbar_button_color=BORDER)
-        self.scores_scroll.grid(row=3, column=0, sticky="nsew", padx=6, pady=(0, 8))
-        self.scores_scroll.grid_columnconfigure(0, weight=1)
-        self._score_rows = []
+        self.btn_reg_close = ctk.CTkButton(rf, text="🔒  Uzavřít registraci (0 hráčů)",
+            fg_color="transparent", hover_color=CARD_BG,
+            text_color=TEXT_DIM, border_color=BORDER, border_width=1,
+            font=ctk.CTkFont("", 12), height=40, corner_radius=8,
+            state="disabled", command=self._do_custom_reg_close)
+        self.btn_reg_close.grid(row=2, column=0, padx=12, pady=(0, 5), sticky="ew")
+
+        self.btn_place_ship = ctk.CTkButton(rf, text="🗺  Umístit loď",
+            fg_color="transparent", hover_color=CARD_BG,
+            text_color=TEXT_DIM, border_color=BORDER, border_width=1,
+            font=ctk.CTkFont("", 12), height=40, corner_radius=8,
+            state="disabled", command=self._do_custom_place_ship)
+        self.btn_place_ship.grid(row=3, column=0, padx=12, pady=(0, 5), sticky="ew")
+
+        self.btn_custom_stop = ctk.CTkButton(rf, text="⏹  Zastavit hru",
+            fg_color="#2a1a1a", hover_color="#3a2020",
+            text_color="#ff6666", border_color="#ff4444", border_width=1,
+            font=ctk.CTkFont("", 12), height=40, corner_radius=8,
+            state="disabled", command=self._do_custom_stop)
+        self.btn_custom_stop.grid(row=4, column=0, padx=12, pady=(0, 10), sticky="ew")
+
+        ctk.CTkFrame(rf, height=1, fg_color=BORDER).grid(
+            row=5, column=0, sticky="ew", padx=12, pady=(0, 8))
+
+        self.lbl_turn = ctk.CTkLabel(rf, text="",
+            font=ctk.CTkFont("", 13, "bold"), text_color=KICK_GREEN)
+        self.lbl_turn.grid(row=6, column=0, padx=14, pady=(0, 8), sticky="w")
+
+        ctk.CTkFrame(rf, height=1, fg_color=BORDER).grid(
+            row=7, column=0, sticky="ew", padx=12, pady=(0, 6))
+
+        reg_hdr = ctk.CTkFrame(rf, fg_color="transparent")
+        reg_hdr.grid(row=8, column=0, sticky="ew", padx=12, pady=(0, 4))
+        reg_hdr.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(reg_hdr, text="PŘIHLÁŠENÍ HRÁČI",
+            font=ctk.CTkFont("", 10, "bold"), text_color=TEXT_DIM
+        ).grid(row=0, column=0, sticky="w")
+        self.lbl_player_count = ctk.CTkLabel(reg_hdr, text="0 hráčů",
+            font=ctk.CTkFont("", 10), text_color=TEXT_DIM)
+        self.lbl_player_count.grid(row=0, column=1, sticky="e")
+
+        self.players_scroll = ctk.CTkScrollableFrame(rf, fg_color="transparent",
+            scrollbar_button_color=BORDER)
+        self.players_scroll.grid(row=9, column=0, sticky="nsew", padx=6, pady=(0, 8))
+        self.players_scroll.grid_columnconfigure(0, weight=1)
+        self._player_rows = []
 
         # Log
         lf = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12)
-        lf.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=20, pady=(0, 20))
+        lf.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=20, pady=(0, 20))
         lf.grid_columnconfigure(0, weight=1)
         lf.grid_rowconfigure(1, weight=1)
         lhdr = ctk.CTkFrame(lf, fg_color="transparent")
@@ -921,23 +1525,123 @@ class App(ctk.CTk):
 
     def _set_status(self, status):
         configs = {
-            "idle":         ("⚓", "Bot je online",       "Čeká na !start od moderátora",    KICK_GREEN),
-            "playing":      ("🎯", "Hra probíhá!",        "Hráči střílí souřadnice do chatu", "#ff4444"),
-            "done":         ("🏆", "Hra skončila!",       "Moderátor zadá !start pro novou",  KICK_GREEN),
-            "disconnected": ("⚪", "Odpojeno",            "Klikni na Spustit bota",           TEXT_DIM),
+            "idle":           ("⚓", "Bot je online",        "Moderátor zadá !start pro registraci",        KICK_GREEN),
+            "registration":   ("📋", "Registrace otevřena!", "Hráči píší 1 do chatu  •  !close uzavře",    "#66aaff"),
+            "placement":      ("🗺", "Uzavřeno — umísti loď", "Klikni 🗺 Umístit loď vpravo",              YELLOW_WARN),
+            "custom_playing": ("🎯", "Hra probíhá!",          "Hráči se střídají — bot se ptá",             "#ff4444"),
+            "done":           ("🏆", "Hra skončila!",         "Moderátor zadá !start pro novou hru",        KICK_GREEN),
+            "disconnected":   ("⚪", "Odpojeno",              "Klikni na Spustit bota",                     TEXT_DIM),
         }
         icon, title, sub, color = configs.get(status, ("⚪", status, "", TEXT_DIM))
-        dot = {"idle": "🟢 Online", "playing": "🔴 Hraje se", "done": "🏆 Hotovo",
-               "disconnected": "⚪ Odpojeno"}.get(status, status)
+        dot = {
+            "idle":           "🟢 Online",
+            "registration":   "🔵 Registrace",
+            "placement":      "🟡 Umísťování",
+            "custom_playing": "🔴 Hra probíhá",
+            "done":           "🏆 Hotovo",
+            "disconnected":   "⚪ Odpojeno",
+        }.get(status, status)
+
         def _update():
             self.banner_icon.configure(text=icon)
             self.banner_text.configure(text=title, text_color=color)
             self.banner_sub.configure(text=sub)
             self.lbl_status.configure(text=dot)
+
+            if status in ("idle", "done"):
+                self.btn_reg_start.configure(state="normal")
+                self.btn_reg_close.configure(state="disabled")
+                self.btn_place_ship.configure(state="disabled")
+                self.btn_custom_stop.configure(state="disabled")
+            elif status == "registration":
+                self.btn_reg_start.configure(state="disabled")
+                self.btn_reg_close.configure(state="normal")
+                self.btn_place_ship.configure(state="disabled")
+                self.btn_custom_stop.configure(state="normal")
+            elif status == "placement":
+                self.btn_reg_start.configure(state="disabled")
+                self.btn_reg_close.configure(state="disabled")
+                self.btn_place_ship.configure(state="normal")
+                self.btn_custom_stop.configure(state="normal")
+                self.after(150, self._do_custom_place_ship)  # auto-otevřít dialog
+            elif status == "custom_playing":
+                self.btn_reg_start.configure(state="disabled")
+                self.btn_reg_close.configure(state="disabled")
+                self.btn_place_ship.configure(state="disabled")
+                self.btn_custom_stop.configure(state="normal")
+            elif status == "disconnected":
+                self.btn_reg_start.configure(state="disabled")
+                self.btn_reg_close.configure(state="disabled")
+                self.btn_place_ship.configure(state="disabled")
+                self.btn_custom_stop.configure(state="disabled")
+
         self.after(0, _update)
 
-    def _update_board(self, game: LodeGame):
-        self.after(0, lambda: self._draw_board(game))
+    # ── Vlastní hra — akce tlačítek ───────────────────────────────────────────
+    def _do_custom_reg_start(self):
+        cid = self.entry_cid.get().strip()
+        cs  = self.entry_csecret.get().strip()
+        if not self.engine.running:
+            self._append_log("Bot není připojen.", "error"); return
+        self.engine.custom_start_registration(cid, cs)
+
+    def _do_custom_reg_close(self):
+        cid = self.entry_cid.get().strip()
+        cs  = self.entry_csecret.get().strip()
+        self.engine.custom_close_registration(cid, cs)
+
+    def _do_custom_place_ship(self):
+        if not self.engine.cgame.players:
+            self._append_log("Nejdřív zaregistruj hráče.", "error"); return
+        ShipPlacementDialog(self, self.engine.cgame, self._on_ship_placed)
+
+    def _on_ship_placed(self, cells: set):
+        cid = self.entry_cid.get().strip()
+        cs  = self.entry_csecret.get().strip()
+        self.engine.custom_start_game(cells, cid, cs)
+
+    def _do_custom_stop(self):
+        cid = self.entry_cid.get().strip()
+        cs  = self.entry_csecret.get().strip()
+        self.engine.custom_stop_game(cid, cs)
+        self.lbl_turn.configure(text="")
+
+    def _update_reg_list(self, players: list):
+        def _upd():
+            n = len(players)
+            self.lbl_player_count.configure(text=f"{n} hráčů")
+            self.btn_reg_close.configure(text=f"🔒  Uzavřít registraci ({n} hráčů)")
+            for w in self._player_rows:
+                w.destroy()
+            self._player_rows.clear()
+            if players:
+                for i, p in enumerate(players):
+                    lbl = ctk.CTkLabel(self.players_scroll,
+                        text=f"{i + 1}. {p}",
+                        font=ctk.CTkFont("", 11), text_color=TEXT_BRIGHT, anchor="w")
+                    lbl.grid(row=i, column=0, padx=8, pady=1, sticky="w")
+                    self._player_rows.append(lbl)
+            else:
+                lbl = ctk.CTkLabel(self.players_scroll,
+                    text="Čekám… hráči píší 1 do chatu",
+                    font=ctk.CTkFont("", 11), text_color=TEXT_DIM, anchor="w")
+                lbl.grid(row=0, column=0, padx=8, pady=4, sticky="w")
+                self._player_rows.append(lbl)
+        self.after(0, _upd)
+
+    def _update_turn(self, current_player: str):
+        def _upd():
+            if current_player:
+                self.lbl_turn.configure(text=f"Na tahu: @{current_player}")
+            else:
+                self.lbl_turn.configure(text="")
+        self.after(0, _upd)
+
+    def _update_board(self, game):
+        if isinstance(game, CustomGame):
+            self.after(0, lambda: self._draw_custom_board(game))
+        else:
+            self.after(0, lambda: self._draw_board(game))
 
     def _draw_board(self, game: LodeGame):
         # Zjistíme sunk cells pro oranžovou barvu
@@ -981,54 +1685,101 @@ class App(ctk.CTk):
         else:
             self.lbl_shots.configure(text="")
 
-        self._draw_ships(game)
+    def _draw_custom_board(self, cgame: CustomGame):
+        rl   = cgame.rows_labels
+        cols = cgame.grid_cols
 
-    def _draw_ships(self, game: LodeGame):
-        for w in self._ship_rows:
+        t = self.board_text
+        t.configure(state="normal")
+        t.delete("1.0", "end")
+
+        t.insert("end", "   ", "header")
+        for c in range(1, cols + 1):
+            t.insert("end", str(c % 10), "header")
+        t.insert("end", "\n")
+
+        for ri in range(cgame.grid_rows):
+            t.insert("end", f"{rl[ri]}: ", "rowlbl")
+            for ci in range(cols):
+                shot = cgame.shots.get((ri, ci))
+                if shot is None:
+                    t.insert("end", "·", "empty")
+                elif shot["hit"]:
+                    t.insert("end", "X", "hit")
+                else:
+                    t.insert("end", "○", "miss")
+            t.insert("end", "\n")
+
+        t.configure(state="disabled")
+
+        total = len(cgame.shots)
+        hits  = sum(1 for s in cgame.shots.values() if s["hit"])
+        left  = cgame.hits_left()
+        if total > 0:
+            self.lbl_shots.configure(
+                text=f"výstřelů: {total}  zásahů: {hits}  zbývá: {left}"
+            )
+        else:
+            self.lbl_shots.configure(text="")
+
+        # Shot history list
+        for w in self._shot_rows:
             w.destroy()
-        self._ship_rows.clear()
+        self._shot_rows.clear()
 
-        for i, ship in enumerate(game.ships):
-            bg = CARD_BG if i % 2 == 0 else PANEL_BG
-            rf = ctk.CTkFrame(self.ships_scroll, fg_color=bg, corner_radius=4, height=24)
-            rf.grid(row=i, column=0, sticky="ew", padx=4, pady=1)
-            rf.grid_columnconfigure(1, weight=1)
-            rf.grid_propagate(False)
+        shots_list = list(cgame.shots.items())
+        self.lbl_shot_count.configure(
+            text=f"{total} výstřelů  •  {hits} zásahů" if total else ""
+        )
+        for i, ((r, c), data) in enumerate(shots_list):
+            coord_str = f"{rl[r]}{c + 1}"
+            hit  = data["hit"]
+            user = data["username"]
 
-            color = "#ff8800" if ship["sunk"] else (KICK_GREEN if ship["hits"] else TEXT_MID)
-            cells_str = "█" * len(ship["hits"]) + "·" * (ship["size"] - len(ship["hits"]))
-            status = f"[POTOPENA — {ship['sunk_by']}]" if ship["sunk"] else f"{len(ship['hits'])}/{ship['size']}"
+            bg  = CARD_BG if i % 2 == 0 else PANEL_BG
+            row = ctk.CTkFrame(self.shot_scroll, fg_color=bg, corner_radius=3, height=22)
+            row.grid(row=i, column=0, sticky="ew", padx=4, pady=1)
+            row.grid_columnconfigure(1, weight=1)
+            row.grid_propagate(False)
 
-            ctk.CTkLabel(rf, text=f"{ship['name']} ({ship['size']}p)",
-                         font=ctk.CTkFont("", 10), text_color=color, anchor="w"
-                         ).grid(row=0, column=0, padx=8, pady=2, sticky="w")
-            ctk.CTkLabel(rf, text=f"{cells_str}  {status}",
-                         font=ctk.CTkFont("Courier New", 10), text_color=color, anchor="e"
-                         ).grid(row=0, column=1, padx=8, pady=2, sticky="e")
-            self._ship_rows.append(rf)
+            ctk.CTkLabel(row, text=coord_str,
+                font=ctk.CTkFont("Courier New", 11, "bold"),
+                text_color="#ff4444" if hit else "#4466aa",
+                width=34, anchor="w"
+            ).grid(row=0, column=0, padx=(6, 2), pady=2, sticky="w")
+
+            ctk.CTkLabel(row, text=f"@{user}",
+                font=ctk.CTkFont("", 11),
+                text_color=TEXT_BRIGHT if hit else TEXT_DIM,
+                anchor="w"
+            ).grid(row=0, column=1, padx=2, pady=2, sticky="w")
+
+            ctk.CTkLabel(row, text="✓" if hit else "✗",
+                font=ctk.CTkFont("", 11, "bold"),
+                text_color="#ff4444" if hit else TEXT_DIM,
+                width=20, anchor="e"
+            ).grid(row=0, column=2, padx=(2, 6), pady=2, sticky="e")
+
+            self._shot_rows.append(row)
+
+        # Auto-scroll to latest shot
+        if self._shot_rows:
+            self.shot_scroll._parent_canvas.yview_moveto(1.0)
 
     def _update_scores(self, rows):
-        def _redraw():
-            for w in self._score_rows:
-                w.destroy()
-            self._score_rows.clear()
-            medals = ["🥇", "🥈", "🥉"] + ["  "] * 100
-            for i, (user, pts) in enumerate(rows):
-                bg = CARD_BG if i % 2 == 0 else PANEL_BG
-                rf = ctk.CTkFrame(self.scores_scroll, fg_color=bg, corner_radius=4, height=24)
-                rf.grid(row=i, column=0, sticky="ew", padx=4, pady=1)
-                rf.grid_columnconfigure(0, weight=1)
-                rf.grid_propagate(False)
-                ctk.CTkLabel(rf,
-                             text=f"{medals[i]} {user}",
-                             font=ctk.CTkFont("", 11), text_color=TEXT_BRIGHT, anchor="w"
-                             ).grid(row=0, column=0, padx=8, pady=2, sticky="w")
-                ctk.CTkLabel(rf,
-                             text=f"{pts} b",
-                             font=ctk.CTkFont("", 11, "bold"), text_color=KICK_GREEN, anchor="e"
-                             ).grid(row=0, column=1, padx=8, pady=2, sticky="e")
-                self._score_rows.append(rf)
-        self.after(0, _redraw)
+        pass  # custom game has no score system
+
+    def _open_bot_config(self):
+        cfg_path = LODE_BOT_CONFIG_FILE.resolve()
+        if not cfg_path.exists():
+            self.engine.reload_config()  # ensures file is created
+        try:
+            os.startfile(str(cfg_path))
+        except Exception as e:
+            self._append_log(f"Nelze otevřít soubor: {e}", "error")
+
+    def _reload_bot_config(self):
+        self.engine.reload_config()
 
     def _clear_log(self):
         self.log_box.configure(state="normal")

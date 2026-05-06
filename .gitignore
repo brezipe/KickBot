@@ -1,5 +1,6 @@
 venv/
 build/
+lode/
 *.json
 *.spec
 claude_notes.txt

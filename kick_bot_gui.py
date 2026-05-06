@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260430.2305"
+BUILD_VERSION = "260506.2353"
 
 DEBUG = False
 
@@ -146,10 +146,11 @@ def load_bot_config() -> dict:
 #  Logika bota
 # ════════════════════════════════════════════════════════════════════════════
 class BotEngine:
-    def __init__(self, log_cb, status_cb, guess_cb):
+    def __init__(self, log_cb, status_cb, guess_cb, result_cb=None):
         self.log_cb    = log_cb
         self.status_cb = status_cb
         self.guess_cb  = guess_cb
+        self.result_cb = result_cb or (lambda c, r: None)
 
         self.collecting     = False
         self.guesses        = {}
@@ -475,6 +476,7 @@ class BotEngine:
         self.log(f"━━━ Vyhodnocení — správné číslo: {correct} ━━━", "success")
         if not self.guesses:
             self.send_chat(self._msg("zadne_odhady"), client_id, client_secret)
+            self.result_cb(correct, [])
             return
         distances = {u: abs(g - correct) for u, g in self.guesses.items()}
         min_dist  = min(distances.values())
@@ -490,6 +492,12 @@ class BotEngine:
         for u, g in winners:
             self.log(f"  🏆 {u} → {g}", "success")
         self.status_cb("done")
+
+        sorted_results = sorted(
+            [(u, g, abs(g - correct)) for u, g in self.guesses.items()],
+            key=lambda x: x[2]
+        )
+        self.result_cb(correct, sorted_results)
 
     # ── WebSocket ─────────────────────────────────────────────────────────────
     def connect(self, slug, client_id, client_secret, on_connected):
@@ -560,8 +568,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(f"Kick Soutěžní Bot v{BUILD_VERSION}")
-        self.geometry("960x700")
-        self.minsize(880, 850)
+        self.geometry("1200x700")
+        self.minsize(1000, 600)
         self.configure(fg_color=DARK_BG)
 
         self._load_config()
@@ -569,6 +577,7 @@ class App(ctk.CTk):
             log_cb    = self._append_log,
             status_cb = self._set_status,
             guess_cb  = self._update_guesses,
+            result_cb = self._update_results,
         )
         if self.engine._token_valid():
             self._token_status = "valid"
@@ -599,9 +608,11 @@ class App(ctk.CTk):
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=0)
         self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(2, weight=0)
         self.grid_rowconfigure(0, weight=1)
         self._build_sidebar()
         self._build_main()
+        self._build_right_panel()
 
     def _build_sidebar(self):
         sb = ctk.CTkFrame(self, fg_color=PANEL_BG, corner_radius=0, width=280)
@@ -762,6 +773,64 @@ class App(ctk.CTk):
         self.log_box.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.log_box.configure(state="disabled")
 
+    def _build_right_panel(self):
+        rp = ctk.CTkFrame(self, fg_color=PANEL_BG, corner_radius=0, width=240)
+        rp.grid(row=0, column=2, sticky="nsew", padx=(1, 0))
+        rp.grid_propagate(False)
+        rp.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(rp, text="🎮 Ovládání", font=ctk.CTkFont("", 18, "bold"),
+                     text_color=TEXT_BRIGHT).grid(row=0, column=0, padx=20, pady=(24, 4), sticky="w")
+        ctk.CTkFrame(rp, height=1, fg_color=BORDER).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 16))
+
+        self._section(rp, "SOUTĚŽ", 2)
+
+        self.btn_panel_start = ctk.CTkButton(rp, text="▶  Start soutěže",
+            fg_color=KICK_GREEN, hover_color="#45d614", text_color="#000",
+            font=ctk.CTkFont("", 13, "bold"), height=44, corner_radius=8,
+            command=self._panel_start)
+        self.btn_panel_start.grid(row=3, column=0, padx=16, pady=(4, 6), sticky="ew")
+
+        self.btn_panel_stop = ctk.CTkButton(rp, text="⏹  Stop soutěže",
+            fg_color="#2a1a1a", hover_color="#3a2020", text_color="#ff6666",
+            border_color="#ff4444", border_width=1,
+            font=ctk.CTkFont("", 12), height=36, corner_radius=8,
+            command=self._panel_stop)
+        self.btn_panel_stop.grid(row=4, column=0, padx=16, pady=(0, 16), sticky="ew")
+
+        ctk.CTkFrame(rp, height=1, fg_color=BORDER).grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 16))
+
+        self._section(rp, "VYHODNOCENÍ", 6)
+        ctk.CTkLabel(rp, text="Výherní číslo", font=ctk.CTkFont("", 12),
+                     text_color=TEXT_MID).grid(row=7, column=0, padx=16, pady=(4, 2), sticky="w")
+        self.entry_winner_num = ctk.CTkEntry(rp, fg_color=CARD_BG, border_color=BORDER,
+            text_color=TEXT_BRIGHT, font=ctk.CTkFont("", 15, "bold"),
+            height=40, corner_radius=6, placeholder_text="např. 254")
+        self.entry_winner_num.grid(row=8, column=0, padx=16, pady=(0, 8), sticky="ew")
+
+        self.btn_evaluate = ctk.CTkButton(rp, text="🏆  Zobraz výsledek",
+            fg_color="#1e2a3a", hover_color="#2a3a4f", text_color="#4da6ff",
+            border_color="#2a4a6a", border_width=1,
+            font=ctk.CTkFont("", 13, "bold"), height=44, corner_radius=8,
+            command=self._panel_evaluate)
+        self.btn_evaluate.grid(row=9, column=0, padx=16, pady=(0, 16), sticky="ew")
+
+        ctk.CTkFrame(rp, height=1, fg_color=BORDER).grid(row=10, column=0, sticky="ew", padx=16, pady=(0, 12))
+
+        self._section(rp, "VÝSLEDKY — TOP 3", 11)
+
+        self.results_frame = ctk.CTkFrame(rp, fg_color="transparent")
+        self.results_frame.grid(row=12, column=0, sticky="nsew", padx=8, pady=(4, 8))
+        self.results_frame.grid_columnconfigure(0, weight=1)
+
+        self.lbl_results_placeholder = ctk.CTkLabel(self.results_frame,
+            text="Zadej výherní číslo\na klikni na\n'Zobraz výsledek'.",
+            font=ctk.CTkFont("", 11), text_color=TEXT_DIM, justify="center")
+        self.lbl_results_placeholder.grid(row=0, column=0, pady=16)
+
+        self._result_rows = []
+        rp.grid_rowconfigure(12, weight=1)
+
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _section(self, parent, text, row):
         ctk.CTkLabel(parent, text=text, font=ctk.CTkFont("", 10, "bold"),
@@ -858,6 +927,45 @@ class App(ctk.CTk):
         """Znovu načte bot_config.json bez restartu bota."""
         self.engine.reload_bot_config()
 
+    def _panel_start(self):
+        if not self.engine.running:
+            self._append_log("Bot není připojen.", "error"); return
+        if self.engine.collecting:
+            self._append_log("Soutěž už probíhá.", "warn"); return
+        cid = self.entry_cid.get().strip()
+        cs  = self.entry_csecret.get().strip()
+        self.engine.collecting = True
+        self.engine.guesses = {}
+        self.engine.guess_cb([])
+        self.engine.log("▶ Soutěž zahájena", "success")
+        self.engine.status_cb("collecting")
+        self.engine.send_chat(self.engine._msg("soutez_zahajena"), cid, cs)
+
+    def _panel_stop(self):
+        if not self.engine.running:
+            self._append_log("Bot není připojen.", "error"); return
+        if not self.engine.collecting:
+            self._append_log("Žádná soutěž momentálně neprobíhá.", "warn"); return
+        cid = self.entry_cid.get().strip()
+        cs  = self.entry_csecret.get().strip()
+        self.engine.collecting = False
+        self.engine.log(f"⏹ Sběr ukončen. Odhadů: {len(self.engine.guesses)}", "warn")
+        self.engine.status_cb("stopped")
+        self.engine.send_chat(
+            self.engine._msg("sber_ukoncen", pocet=len(self.engine.guesses)), cid, cs)
+
+    def _panel_evaluate(self):
+        text = self.entry_winner_num.get().strip()
+        if not text:
+            self._append_log("Zadej výherní číslo.", "error"); return
+        try:
+            n = int(text)
+        except ValueError:
+            self._append_log("Neplatné číslo — zadej celé číslo.", "error"); return
+        cid = self.entry_cid.get().strip()
+        cs  = self.entry_csecret.get().strip()
+        self.engine._evaluate(n, cid, cs)
+
     # ── Callbacks ─────────────────────────────────────────────────────────────
     def _append_log(self, msg, level="info"):
         ts   = datetime.now().strftime("%H:%M:%S")
@@ -912,6 +1020,37 @@ class App(ctk.CTk):
                              text_color=KICK_GREEN, anchor="e"
                              ).grid(row=0, column=1, padx=10, pady=2, sticky="e")
                 self._guess_rows.append(row_f)
+        self.after(0, _redraw)
+
+    def _update_results(self, correct, sorted_results):
+        def _redraw():
+            for w in self._result_rows:
+                w.destroy()
+            self._result_rows.clear()
+            if not sorted_results:
+                self.lbl_results_placeholder.configure(
+                    text="Nikdo nic nehádal.")
+                self.lbl_results_placeholder.grid(row=0, column=0, pady=16)
+                return
+            self.lbl_results_placeholder.grid_remove()
+            medals = ["🥇", "🥈", "🥉"]
+            top3 = sorted_results[:3]
+            for i, (user, guess, dist) in enumerate(top3):
+                medal = medals[i] if i < len(medals) else "  "
+                row_f = ctk.CTkFrame(self.results_frame, fg_color=CARD_BG, corner_radius=6)
+                row_f.grid(row=i, column=0, sticky="ew", padx=4, pady=3)
+                row_f.grid_columnconfigure(1, weight=1)
+                ctk.CTkLabel(row_f, text=medal,
+                             font=ctk.CTkFont("", 16)).grid(row=0, column=0, padx=(8, 4), pady=8)
+                ctk.CTkLabel(row_f, text=user, font=ctk.CTkFont("", 11, "bold"),
+                             text_color=TEXT_BRIGHT, anchor="w"
+                             ).grid(row=0, column=1, sticky="w", padx=4, pady=8)
+                color = KICK_GREEN if dist == 0 else (YELLOW_WARN if i == 0 else TEXT_MID)
+                label = str(guess) if dist == 0 else f"{guess}\n±{dist}"
+                ctk.CTkLabel(row_f, text=label, font=ctk.CTkFont("", 11),
+                             text_color=color, anchor="e", justify="right"
+                             ).grid(row=0, column=2, padx=8, pady=8, sticky="e")
+                self._result_rows.append(row_f)
         self.after(0, _redraw)
 
     def _clear_log(self):
