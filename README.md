@@ -1,3 +1,5 @@
+## Vytvořeno pro: [https://ministrmystery.cz](https://ministrmystery.cz)
+
 python3 -m venv venv
 
 Win:
