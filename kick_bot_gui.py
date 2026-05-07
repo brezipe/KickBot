@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0659"
+BUILD_VERSION = "260507.0705"
 
 DEBUG = False
 
@@ -1028,8 +1028,8 @@ class App(ctk.CTk):
                 pid = os.getpid()
                 ps = (
                     f"Wait-Process -Id {pid} -ErrorAction SilentlyContinue; "
-                    f"Rename-Item '{app_dir}' '_KickBot_old'; "
-                    f"Rename-Item '{new_dir}' '{app_dir}'; "
+                    f"Move-Item '{app_dir}' '{old_dir}'; "
+                    f"Move-Item '{new_dir}' '{app_dir}'; "
                     f"Remove-Item '{extract_to}' -Recurse -Force -ErrorAction SilentlyContinue; "
                     f"Start-Process '{new_exe}'; "
                     f"Start-Sleep 20; "
