@@ -623,7 +623,10 @@ class App(ctk.CTk):
         # Aplikuj výchozí stav protokolu z bot_config.json
         if self.engine.bcfg.get("gui", {}).get("log_collapsed", True):
             self.after(100, self._toggle_log)
-        # Ukliď pozůstatek po aktualizaci
+        # Ukliď pozůstatek po aktualizaci; do té doby zablokuj zavření okna
+        if getattr(sys, "frozen", False) and (
+                Path(sys.executable).parent / "_KickBot_old.exe").exists():
+            self.protocol("WM_DELETE_WINDOW", lambda: None)
         self.after(3000, self._cleanup_old_exe)
         # První spuštění — nabídni nastavení (výjimka AV, zástupce na ploše)
         self.after(50, self._check_first_run)
@@ -771,7 +774,9 @@ class App(ctk.CTk):
             try:
                 old.unlink()
             except Exception:
-                pass
+                self.after(2000, self._cleanup_old_exe)
+                return
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
 
     # ── První spuštění ────────────────────────────────────────────────────────
     def _check_first_run(self):
