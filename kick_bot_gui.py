@@ -964,6 +964,9 @@ class App(ctk.CTk):
 
         current_exe = Path(sys.executable)
         new_exe     = current_exe.parent / "_KickBot_update.exe"
+        old_exe     = current_exe.parent / "_KickBot_old.exe"
+        exe_dir     = str(current_exe.parent)
+        exe_name    = current_exe.name
 
         def _worker():
             try:
@@ -988,23 +991,24 @@ class App(ctk.CTk):
                 self.after(0, lambda: lbl_progress.configure(
                     text="Aktualizace stazena - restartuji..."))
 
-                bat_path = current_exe.parent / "_kickbot_upd.bat"
-                bat_path.write_text(
-                    "@echo off\r\n"
-                    "timeout /t 2 /nobreak >nul\r\n"
-                    f"move /y \"{new_exe}\" \"{current_exe}\"\r\n"
-                    f"start \"\" \"{current_exe}\"\r\n"
-                    "del \"%~f0\"\r\n",
-                    encoding="cp1250"
+                # PowerShell: Rename-Item funguje i na bezicim exe, move /y ne
+                ps = (
+                    "Start-Sleep -Seconds 3; "
+                    f"$d = '{exe_dir}'; "
+                    f"Remove-Item (Join-Path $d '_KickBot_old.exe') -ErrorAction SilentlyContinue; "
+                    f"Rename-Item (Join-Path $d '{exe_name}') '_KickBot_old.exe' -Force; "
+                    f"Rename-Item (Join-Path $d '_KickBot_update.exe') '{exe_name}' -Force; "
+                    f"Start-Process (Join-Path $d '{exe_name}'); "
+                    "Start-Sleep -Seconds 2; "
+                    f"Remove-Item (Join-Path $d '_KickBot_old.exe') -ErrorAction SilentlyContinue"
                 )
-
                 import subprocess as _sp
                 _sp.Popen(
-                    ["cmd", "/c", str(bat_path)],
+                    ["powershell", "-ExecutionPolicy", "Bypass",
+                     "-WindowStyle", "Hidden", "-Command", ps],
                     creationflags=_sp.DETACHED_PROCESS | _sp.CREATE_NEW_PROCESS_GROUP,
-                    close_fds=True,
                 )
-                self.after(500, self.destroy)
+                self.after(1000, self.destroy)
 
             except Exception as exc:
                 self.after(0, lambda: self._append_log(
