@@ -50,7 +50,7 @@ YELLOW_WARN = "#ffcc00"
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
-TEST_RELEASE = True
+TEST_RELEASE = True2
 
 # ════════════════════════════════════════════════════════════════════════════
 #  Načítání bot_config.json
