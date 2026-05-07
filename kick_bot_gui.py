@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0649"
+BUILD_VERSION = "260507.0654"
 
 DEBUG = False
 pass
@@ -1022,14 +1022,22 @@ class App(ctk.CTk):
                 self.after(0, lambda: lbl_progress.configure(text="Instaluji…"))
                 if old_dir.exists():
                     _shutil.rmtree(old_dir)
-                # Opustíme app_dir jako CWD — Windows neumí přejmenovat aktuální pracovní adresář
-                os.chdir(str(parent_dir))
-                app_dir.rename(old_dir)      # KickBot/ → _KickBot_old/
-                new_dir.rename(app_dir)      # _kickbot_update/KickBot/ → KickBot/
-                extract_to.rmdir()           # remove empty _kickbot_update/
 
+                # Python nemůže přejmenovat vlastní složku (DLL jsou načteny).
+                # PowerShell počká na konec procesu a udělá rename + spuštění nové verze.
                 import subprocess as _sp
-                _sp.Popen([str(new_exe)], close_fds=True)
+                pid = os.getpid()
+                ps = (
+                    f"Wait-Process -Id {pid} -ErrorAction SilentlyContinue; "
+                    f"Rename-Item '{app_dir}' '_KickBot_old'; "
+                    f"Rename-Item '{new_dir}' '{app_dir}'; "
+                    f"Remove-Item '{extract_to}' -Recurse -Force -ErrorAction SilentlyContinue; "
+                    f"Start-Process '{new_exe}'; "
+                    f"Start-Sleep 20; "
+                    f"Remove-Item '{old_dir}' -Recurse -Force -ErrorAction SilentlyContinue"
+                )
+                _sp.Popen(["powershell", "-WindowStyle", "Hidden",
+                           "-NonInteractive", "-Command", ps])
 
                 self.after(0, lambda: lbl_progress.configure(text="Hotovo! Spouštím novou verzi…"))
                 self.after(800, self.destroy)
