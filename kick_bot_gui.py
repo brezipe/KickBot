@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0239"
+BUILD_VERSION = "260507.0342"
 
 DEBUG = False
 
@@ -73,6 +73,9 @@ DEFAULT_BOT_CONFIG = {
         "enabled":          False,
         "test_server_port": 7879,
     },
+    "gui": {
+        "log_collapsed": True,
+    },
 }
 
 # Šablona která se zapíše jako bot_config.json pokud soubor neexistuje
@@ -116,6 +119,10 @@ BOT_CONFIG_TEMPLATE = {
         "enabled":          False,
         "test_server_port": 7879,
     },
+    "gui": {
+        "_vysvetleni":  "Nastavení vzhledu a chování rozhraní.",
+        "log_collapsed": True,
+    },
 }
 
 
@@ -143,11 +150,12 @@ def load_bot_config() -> dict:
                 for k, v in user[section].items():
                     if not k.startswith("_") and isinstance(v, str):
                         cfg[section][k] = v
-        # Debug sekce — přijímá bool a int
-        if "debug" in user and isinstance(user["debug"], dict):
-            for k, v in user["debug"].items():
-                if not k.startswith("_") and k in cfg["debug"]:
-                    cfg["debug"][k] = v
+        # Debug a gui sekce — přijímají bool a int
+        for section in ("debug", "gui"):
+            if section in user and isinstance(user[section], dict):
+                for k, v in user[section].items():
+                    if not k.startswith("_") and k in cfg[section]:
+                        cfg[section][k] = v
     except json.JSONDecodeError as e:
         print(f"[ERROR] bot_config.json má chybu: {e} — používám výchozí hodnoty")
     except Exception as e:
@@ -608,6 +616,11 @@ class App(ctk.CTk):
             global DEBUG
             DEBUG = True
             self._start_test_server(int(debug_cfg.get("test_server_port", 7879)))
+        # Aplikuj výchozí stav protokolu z bot_config.json
+        if self.engine.bcfg.get("gui", {}).get("log_collapsed", True):
+            self.after(100, self._toggle_log)
+        # Zkontroluj kompatibilitu bot_config.json
+        self.after(200, self._check_config_compat)
 
     # ── Test server (DEBUG) ───────────────────────────────────────────────────
     def _start_test_server(self, port: int):
@@ -646,6 +659,99 @@ class App(ctk.CTk):
                 f"🧪 [DEBUG] Test server spuštěn — localhost:{port}/simulate", "warn")
         except Exception as e:
             self._append_log(f"❌ Nelze spustit test server na portu {port}: {e}", "error")
+
+    # ── Config kompatibilita ──────────────────────────────────────────────────
+    def _check_config_compat(self):
+        if not BOT_CONFIG_FILE.exists():
+            return
+        try:
+            raw = json.loads(BOT_CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        missing = []
+        for section, defaults in DEFAULT_BOT_CONFIG.items():
+            if not isinstance(defaults, dict):
+                continue
+            if section not in raw:
+                missing.append(f"cela sekce [{section}]")
+            else:
+                for key in defaults:
+                    if not key.startswith("_") and key not in raw[section]:
+                        missing.append(f"{section} → {key}")
+        if missing:
+            self._show_config_compat_dialog(missing)
+
+    def _show_config_compat_dialog(self, missing: list):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Nekompatibilní konfigurace")
+        dlg.configure(fg_color=DARK_BG)
+        dlg.resizable(False, False)
+        dlg.grab_set()
+        dlg.lift()
+        dlg.focus_force()
+        dlg.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(dlg, text="⚠️  Nekompatibilní konfigurace",
+                     font=ctk.CTkFont("", 16, "bold"), text_color=YELLOW_WARN
+                     ).grid(row=0, column=0, padx=28, pady=(28, 6))
+        ctk.CTkLabel(dlg,
+                     text="bot_config.json není kompatibilní s touto verzí bota.\nChybí následující položky:",
+                     font=ctk.CTkFont("", 12), text_color=TEXT_MID, justify="center"
+                     ).grid(row=1, column=0, padx=28, pady=(0, 10))
+
+        items_frame = ctk.CTkFrame(dlg, fg_color=CARD_BG, corner_radius=8)
+        items_frame.grid(row=2, column=0, padx=28, pady=(0, 20), sticky="ew")
+        for i, item in enumerate(missing):
+            ctk.CTkLabel(items_frame, text=f"• {item}",
+                         font=ctk.CTkFont("Courier New", 11), text_color=TEXT_DIM,
+                         anchor="w").grid(row=i, column=0, padx=16, pady=(6 if i == 0 else 2, 6 if i == len(missing)-1 else 2), sticky="w")
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.grid(row=3, column=0, padx=28, pady=(0, 28), sticky="ew")
+        btn_row.grid_columnconfigure(0, weight=1)
+        btn_row.grid_columnconfigure(1, weight=1)
+
+        def do_fix():
+            self._fix_config()
+            dlg.destroy()
+
+        ctk.CTkButton(btn_row, text="✅  Opravit",
+                      fg_color="#1e3a1e", hover_color="#2a4f2a",
+                      text_color=KICK_GREEN, border_color=KICK_GREEN, border_width=1,
+                      font=ctk.CTkFont("", 13, "bold"), height=42, corner_radius=8,
+                      command=do_fix
+                      ).grid(row=0, column=0, padx=(0, 8), sticky="ew")
+        ctk.CTkButton(btn_row, text="Ignorovat",
+                      fg_color="transparent", hover_color=CARD_BG,
+                      text_color=TEXT_DIM, border_color=BORDER, border_width=1,
+                      font=ctk.CTkFont("", 12), height=42, corner_radius=8,
+                      command=dlg.destroy
+                      ).grid(row=0, column=1, padx=(8, 0), sticky="ew")
+
+        dlg.update_idletasks()
+        w, h = dlg.winfo_width(), dlg.winfo_height()
+        x = self.winfo_x() + (self.winfo_width()  - w) // 2
+        y = self.winfo_y() + (self.winfo_height() - h) // 2
+        dlg.geometry(f"+{x}+{y}")
+
+    def _fix_config(self):
+        try:
+            raw = json.loads(BOT_CONFIG_FILE.read_text(encoding="utf-8"))
+            for section, defaults in DEFAULT_BOT_CONFIG.items():
+                if not isinstance(defaults, dict):
+                    continue
+                if section not in raw:
+                    raw[section] = {k: v for k, v in defaults.items()
+                                    if not k.startswith("_")}
+                else:
+                    for key, val in defaults.items():
+                        if not key.startswith("_") and key not in raw[section]:
+                            raw[section][key] = val
+            BOT_CONFIG_FILE.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.engine.reload_bot_config()
+        except Exception as e:
+            self._append_log(f"❌ Chyba při opravě configu: {e}", "error")
 
     # ── Config ────────────────────────────────────────────────────────────────
     def _load_config(self):
@@ -816,20 +922,27 @@ class App(ctk.CTk):
         self.guess_placeholder.grid(row=0, column=0, columnspan=2, pady=30)
 
         # Log
+        self._log_main      = main
+        self._log_collapsed = False
         lf = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12)
         lf.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
         lf.grid_columnconfigure(0, weight=1)
         lf.grid_rowconfigure(1, weight=1)
+        self._log_frame = lf
         lhdr = ctk.CTkFrame(lf, fg_color="transparent")
         lhdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 4))
         lhdr.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(lhdr, text="Protokol",
                      font=ctk.CTkFont("", 14, "bold"), text_color=TEXT_BRIGHT
                      ).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(lhdr, text="Vymazat", width=70, height=24,
+        self.btn_clear_log = ctk.CTkButton(lhdr, text="Vymazat", width=70, height=24,
             fg_color="transparent", hover_color=BORDER, text_color=TEXT_DIM,
-            font=ctk.CTkFont("", 11), command=self._clear_log
-            ).grid(row=0, column=1, sticky="e")
+            font=ctk.CTkFont("", 11), command=self._clear_log)
+        self.btn_clear_log.grid(row=0, column=1, sticky="e")
+        self.btn_log_toggle = ctk.CTkButton(lhdr, text="▼", width=28, height=24,
+            fg_color="transparent", hover_color=BORDER, text_color=TEXT_DIM,
+            font=ctk.CTkFont("", 13), command=self._toggle_log)
+        self.btn_log_toggle.grid(row=0, column=2, sticky="e", padx=(4, 0))
         self.log_box = ctk.CTkTextbox(lf, fg_color="transparent",
             font=ctk.CTkFont("Courier New", 11), text_color=TEXT_MID,
             wrap="word", scrollbar_button_color=BORDER)
@@ -1115,6 +1228,36 @@ class App(ctk.CTk):
                              ).grid(row=0, column=2, padx=8, pady=8, sticky="e")
                 self._result_rows.append(row_f)
         self.after(0, _redraw)
+
+    def _toggle_log(self):
+        if self._log_collapsed:
+            self._log_frame.grid_rowconfigure(1, weight=1)
+            self.log_box.grid()
+            self._log_frame.grid_propagate(True)
+            self._log_main.grid_rowconfigure(3, weight=1)
+            self.btn_clear_log.grid()
+            self.btn_log_toggle.configure(text="▼")
+            self._log_collapsed = False
+        else:
+            self.btn_clear_log.grid_remove()
+            self.log_box.grid_remove()
+            self._log_frame.grid_rowconfigure(1, weight=0)
+            self._log_frame.configure(height=46)
+            self._log_frame.grid_propagate(False)
+            self._log_main.grid_rowconfigure(3, weight=0)
+            self.btn_log_toggle.configure(text="▲")
+            self._log_collapsed = True
+        self._save_log_collapsed_state(self._log_collapsed)
+
+    def _save_log_collapsed_state(self, collapsed: bool):
+        try:
+            raw = json.loads(BOT_CONFIG_FILE.read_text(encoding="utf-8"))
+            raw.setdefault("gui", {})["log_collapsed"] = collapsed
+            BOT_CONFIG_FILE.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.engine.bcfg.setdefault("gui", {})["log_collapsed"] = collapsed
+        except Exception:
+            pass
 
     def _clear_log(self):
         self.log_box.configure(state="normal")
