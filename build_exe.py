@@ -35,6 +35,7 @@ cmd = [
     "--name", "KickBot",
     "--collect-all", "customtkinter",
     "--collect-all", "darkdetect",
+    "--collect-all", "tkinter",
     "--hidden-import", "curl_cffi",
     "--hidden-import", "websocket",
     "--hidden-import", "requests",
