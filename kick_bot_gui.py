@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0747"
+BUILD_VERSION = "260507.0753"
 
 DEBUG = False
 
@@ -1052,11 +1052,11 @@ class App(ctk.CTk):
                     f"Start-Sleep 2; "
                     f"Add-Content '{lp}' '[PS] Move1 start'; "
                     f"try {{ Move-Item '{app_dir}' '{old_dir}' -ErrorAction Stop; Add-Content '{lp}' '[PS] Move1 OK' }} "
-                    f"catch {{ Add-Content '{lp}' \"[PS] Move1 FAILED: $_\"; exit }}; "
+                    f"catch {{ Add-Content '{lp}' ('[PS] Move1 FAILED: ' + $_.Exception.Message); exit }}; "
                     f"if ((Test-Path '{old_dir}') -and (-not (Test-Path '{app_dir}'))) {{ "
                     f"  Add-Content '{lp}' '[PS] Move2 start'; "
                     f"  try {{ Move-Item '{new_dir}' '{app_dir}' -ErrorAction Stop; Add-Content '{lp}' '[PS] Move2 OK' }} "
-                    f"  catch {{ Add-Content '{lp}' \"[PS] Move2 FAILED: $_\"; exit }}; "
+                    f"  catch {{ Add-Content '{lp}' ('[PS] Move2 FAILED: ' + $_.Exception.Message); exit }}; "
                     f"  Remove-Item '{extract_to}' -Recurse -Force -ErrorAction SilentlyContinue; "
                     f"  Add-Content '{lp}' '[PS] Starting new exe'; "
                     f"  Start-Process '{new_exe}'; "
@@ -1064,7 +1064,7 @@ class App(ctk.CTk):
                     f"  Remove-Item '{old_dir}' -Recurse -Force -ErrorAction SilentlyContinue; "
                     f"  Add-Content '{lp}' '[PS] Done' "
                     f"}} else {{ "
-                    f"  Add-Content '{lp}' \"[PS] Condition FAILED: old=$(Test-Path '{old_dir}') app=$(Test-Path '{app_dir}')\" "
+                    f"  Add-Content '{lp}' ('[PS] Condition FAILED: old=' + (Test-Path '{old_dir}') + ' app=' + (Test-Path '{app_dir}')) "
                     f"}}"
                 )
                 log(f"Launching PowerShell (PID={pid})")
