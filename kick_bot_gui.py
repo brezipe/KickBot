@@ -15,10 +15,9 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0654"
+BUILD_VERSION = "260507.0659"
 
 DEBUG = False
-pass
 
 # ── Kick API konstanty ───────────────────────────────────────────────────────
 KICK_AUTH_URL   = "https://id.kick.com/oauth/authorize"
