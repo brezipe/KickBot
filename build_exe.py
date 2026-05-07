@@ -31,6 +31,7 @@ cmd = [
     sys.executable, "-m", "PyInstaller",
     "--onedir",
     "--noconsole",
+    "-y",
     "--name", "KickBot",
     "--collect-all", "customtkinter",
     "--collect-all", "darkdetect",
