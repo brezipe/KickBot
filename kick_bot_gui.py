@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0342"
+BUILD_VERSION = "260507.0402"
 
 DEBUG = False
 
@@ -893,7 +893,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont("", 16, "bold"), text_color=TEXT_MID, anchor="w")
         self.banner_text.grid(row=0, column=1, sticky="w")
         self.banner_sub = ctk.CTkLabel(self.banner,
-            text="Vyplň nastavení a klikni na Spustit bota",
+            text=self._disconnected_sub(),
             font=ctk.CTkFont("", 11), text_color=TEXT_DIM, anchor="e")
         self.banner_sub.grid(row=0, column=2, padx=20, sticky="e")
 
@@ -1032,6 +1032,11 @@ class App(ctk.CTk):
         else:
             self.lbl_token.configure(text="⚠️ Bot není přihlášen — klikni níže", text_color=YELLOW_WARN)
 
+    def _disconnected_sub(self) -> str:
+        if self._token_status in ("valid", "refresh"):
+            return "Klikni na Spustit bota"
+        return "Klikni na Přihlásit bota"
+
     # ── Akce tlačítek ─────────────────────────────────────────────────────────
     def _do_auth(self):
         cid = self.entry_cid.get().strip()
@@ -1045,6 +1050,7 @@ class App(ctk.CTk):
             if ok:
                 self._token_status = "valid"
                 self.after(0, self._refresh_token_label)
+                self.after(0, lambda: self.banner_sub.configure(text=self._disconnected_sub()))
         self.engine.do_oauth(cid, cs, done)
 
     def _do_login_reset(self):
@@ -1054,6 +1060,7 @@ class App(ctk.CTk):
         self.engine.tokens = {"access_token": "", "refresh_token": "", "expires_at": 0}
         self._token_status = "none"
         self._refresh_token_label()
+        self.banner_sub.configure(text=self._disconnected_sub())
         self._append_log("Token smazán. Klikni na Přihlásit bota.", "warn")
 
     def _do_connect(self):
@@ -1159,7 +1166,7 @@ class App(ctk.CTk):
             "collecting":   ("🔴", "Sbírám odhady!",      "Moderátor zadá stop příkaz",      "#ff4444"),
             "stopped":      ("🟡", "Sběr ukončen",        "Moderátor zadá číslo příkaz",     YELLOW_WARN),
             "done":         ("🏆", "Výsledky vyhlášeny!", "Čeká na příkaz od moderátora",    KICK_GREEN),
-            "disconnected": ("⚪", "Odpojeno",            "Klikni na Spustit bota",          TEXT_DIM),
+            "disconnected": ("⚪", "Odpojeno",            self._disconnected_sub(),          TEXT_DIM),
         }
         icon, title, sub, color = configs.get(status, ("⚪", status, "", TEXT_DIM))
         def _update():
