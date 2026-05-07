@@ -1,0 +1,75 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read BUILD_VERSION
+        id: ver
+        shell: pwsh
+        run: |
+          $v = [regex]::Match(
+            (Get-Content kick_bot_gui.py -Raw),
+            'BUILD_VERSION\s*=\s*"(.+?)"'
+          ).Groups[1].Value
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "BUILD_VERSION = $v"
+
+      - name: Check if release already exists
+        id: skip
+        shell: pwsh
+        run: |
+          $tag = "refs/tags/v${{ steps.ver.outputs.version }}"
+          $hit = git ls-remote --tags origin $tag
+          if ($hit) {
+            "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "Tag already exists — skipping build."
+          } else {
+            "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "New version — will build and release."
+          }
+
+      - name: Set up Python
+        if: steps.skip.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        if: steps.skip.outputs.skip != 'true'
+        run: pip install -r requirements.txt
+
+      - name: Build exe
+        if: steps.skip.outputs.skip != 'true'
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --onefile --noconsole `
+            --name KickBot `
+            --collect-all customtkinter `
+            --collect-all darkdetect `
+            --hidden-import curl_cffi `
+            --hidden-import websocket `
+            --hidden-import requests `
+            kick_bot_gui.py
+
+      - name: Create GitHub Release
+        if: steps.skip.outputs.skip != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          gh release create "v$v" "dist/KickBot.exe" `
+            --title "KickBot $v" `
+            --notes "Automatický release verze $v."
