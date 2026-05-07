@@ -784,7 +784,7 @@ class App(ctk.CTk):
                      font=ctk.CTkFont("", 16, "bold"), text_color=KICK_GREEN
                      ).grid(row=0, column=0, padx=32, pady=(28, 6))
         ctk.CTkLabel(dlg,
-                     text="Pro spravnou funkci doporucujeme provest\njednorázové nastavení:",
+                     text="Pro správnou funkci doporučuji provést\njednorázové nastavení:",
                      font=ctk.CTkFont("", 12), text_color=TEXT_MID, justify="center"
                      ).grid(row=1, column=0, padx=32, pady=(0, 20))
 
@@ -792,11 +792,11 @@ class App(ctk.CTk):
         var_shortcut = ctk.BooleanVar(value=True)
 
         ctk.CTkCheckBox(dlg,
-                        text="Pridat vyjimku v antivirovem programu\n(zabrani falesnym blokacim)",
+                        text="Přidat výjimku v antivirovém programu\n(zabrání falesným blokacím)",
                         variable=var_defender, font=ctk.CTkFont("", 12),
                         text_color=TEXT_BRIGHT, fg_color=KICK_GREEN, hover_color="#45d614",
                         ).grid(row=2, column=0, padx=32, pady=(0, 12), sticky="w")
-        ctk.CTkCheckBox(dlg, text="Vytvorit zastupce na plose",
+        ctk.CTkCheckBox(dlg, text="Vytvořit zástupce na ploše",
                         variable=var_shortcut, font=ctk.CTkFont("", 12),
                         text_color=TEXT_BRIGHT, fg_color=KICK_GREEN, hover_color="#45d614",
                         ).grid(row=3, column=0, padx=32, pady=(0, 20), sticky="w")
