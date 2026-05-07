@@ -50,8 +50,6 @@ YELLOW_WARN = "#ffcc00"
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
-TEST_RELEASE = True2
-
 # ════════════════════════════════════════════════════════════════════════════
 #  Načítání bot_config.json
 # ════════════════════════════════════════════════════════════════════════════
@@ -789,10 +787,10 @@ class App(ctk.CTk):
                      ).grid(row=1, column=0, padx=32, pady=(0, 20))
 
         var_defender = ctk.BooleanVar(value=True)
-        var_shortcut = ctk.BooleanVar(value=True)
+        var_shortcut = ctk.BooleanVar(value=False)
 
         ctk.CTkCheckBox(dlg,
-                        text="Přidat výjimku v antivirovém programu\n(zabrání falesným blokacím)",
+                        text="Přidat výjimku v antivirovém programu\n(nutné pro aktualizace)",
                         variable=var_defender, font=ctk.CTkFont("", 12),
                         text_color=TEXT_BRIGHT, fg_color=KICK_GREEN, hover_color="#45d614",
                         ).grid(row=2, column=0, padx=32, pady=(0, 12), sticky="w")
