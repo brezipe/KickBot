@@ -624,6 +624,8 @@ class App(ctk.CTk):
         # Aplikuj výchozí stav protokolu z bot_config.json
         if self.engine.bcfg.get("gui", {}).get("log_collapsed", True):
             self.after(100, self._toggle_log)
+        # První spuštění — nabídni nastavení (výjimka AV, zástupce na ploše)
+        self.after(50, self._check_first_run)
         # Zkontroluj kompatibilitu bot_config.json
         self.after(200, self._check_config_compat)
         # Zkontroluj dostupnost aktualizace na GitHubu
@@ -759,6 +761,267 @@ class App(ctk.CTk):
             self.engine.reload_bot_config()
         except Exception as e:
             self._append_log(f"❌ Chyba při opravě configu: {e}", "error")
+
+    # ── První spuštění ────────────────────────────────────────────────────────
+    def _check_first_run(self):
+        if not getattr(sys, "frozen", False):
+            return
+        flag = Path(sys.executable).parent / ".configured"
+        if not flag.exists():
+            self._show_first_run_dialog(flag)
+
+    def _show_first_run_dialog(self, flag: Path):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Nastaveni KickBotu")
+        dlg.configure(fg_color=DARK_BG)
+        dlg.resizable(False, False)
+        dlg.grab_set()
+        dlg.lift()
+        dlg.focus_force()
+        dlg.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(dlg, text="Vitej v KickBotu!",
+                     font=ctk.CTkFont("", 16, "bold"), text_color=KICK_GREEN
+                     ).grid(row=0, column=0, padx=32, pady=(28, 6))
+        ctk.CTkLabel(dlg,
+                     text="Pro spravnou funkci doporucujeme provest\njednorázové nastavení:",
+                     font=ctk.CTkFont("", 12), text_color=TEXT_MID, justify="center"
+                     ).grid(row=1, column=0, padx=32, pady=(0, 20))
+
+        var_defender = ctk.BooleanVar(value=True)
+        var_shortcut = ctk.BooleanVar(value=True)
+
+        ctk.CTkCheckBox(dlg,
+                        text="Pridat vyjimku v antivirovem programu\n(zabrani falesnym blokacim)",
+                        variable=var_defender, font=ctk.CTkFont("", 12),
+                        text_color=TEXT_BRIGHT, fg_color=KICK_GREEN, hover_color="#45d614",
+                        ).grid(row=2, column=0, padx=32, pady=(0, 12), sticky="w")
+        ctk.CTkCheckBox(dlg, text="Vytvorit zastupce na plose",
+                        variable=var_shortcut, font=ctk.CTkFont("", 12),
+                        text_color=TEXT_BRIGHT, fg_color=KICK_GREEN, hover_color="#45d614",
+                        ).grid(row=3, column=0, padx=32, pady=(0, 20), sticky="w")
+
+        lbl_status = ctk.CTkLabel(dlg, text="", font=ctk.CTkFont("", 11), text_color=TEXT_DIM)
+        lbl_status.grid(row=4, column=0, padx=32, pady=(0, 8))
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.grid(row=5, column=0, padx=32, pady=(0, 28), sticky="ew")
+        btn_row.grid_columnconfigure(0, weight=1)
+        btn_row.grid_columnconfigure(1, weight=1)
+
+        def _finish():
+            flag.touch()
+            if var_defender.get():
+                lbl_status.configure(text="Ceka na potvrzeni UAC...")
+                dlg.update()
+                self._add_defender_exclusion()
+            if var_shortcut.get():
+                self._create_shortcut()
+            lbl_status.configure(text="Hotovo!")
+            dlg.after(1200, dlg.destroy)
+
+        def _skip():
+            flag.touch()
+            dlg.destroy()
+
+        ctk.CTkButton(btn_row, text="Nastavit",
+                      fg_color="#1e3a1e", hover_color="#2a4f2a",
+                      text_color=KICK_GREEN, border_color=KICK_GREEN, border_width=1,
+                      font=ctk.CTkFont("", 13, "bold"), height=42, corner_radius=8,
+                      command=_finish
+                      ).grid(row=0, column=0, padx=(0, 8), sticky="ew")
+        ctk.CTkButton(btn_row, text="Preskocit",
+                      fg_color="transparent", hover_color=CARD_BG,
+                      text_color=TEXT_DIM, border_color=BORDER, border_width=1,
+                      font=ctk.CTkFont("", 12), height=42, corner_radius=8,
+                      command=_skip
+                      ).grid(row=0, column=1, padx=(8, 0), sticky="ew")
+
+        dlg.update_idletasks()
+        w = dlg.winfo_width(); h = dlg.winfo_height()
+        x = self.winfo_x() + (self.winfo_width()  - w) // 2
+        y = self.winfo_y() + (self.winfo_height() - h) // 2
+        dlg.geometry(f"+{x}+{y}")
+
+    def _add_defender_exclusion(self):
+        import ctypes
+        exe_dir = str(Path(sys.executable).parent)
+        ps_cmd  = f"Add-MpPreference -ExclusionPath '{exe_dir}'"
+        ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", "powershell.exe",
+            f"-ExecutionPolicy Bypass -WindowStyle Hidden -Command \"{ps_cmd}\"",
+            None, 1,
+        )
+
+    def _create_shortcut(self):
+        try:
+            exe_path = str(Path(sys.executable))
+            work_dir = str(Path(sys.executable).parent)
+            shortcut = str(Path.home() / "Desktop" / "KickBot.lnk")
+            ps_cmd   = (
+                f"$ws = New-Object -ComObject WScript.Shell; "
+                f"$s = $ws.CreateShortcut('{shortcut}'); "
+                f"$s.TargetPath = '{exe_path}'; "
+                f"$s.WorkingDirectory = '{work_dir}'; "
+                f"$s.Save()"
+            )
+            import subprocess as _sp
+            _sp.run(["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+                    capture_output=True, timeout=10)
+            self._append_log("Zastupce na plose vytvoren.", "success")
+        except Exception as exc:
+            self._append_log(f"Nelze vytvorit zastupce: {exc}", "warn")
+
+    # ── Auto-update ───────────────────────────────────────────────────────────
+    def _check_for_update(self):
+        def _worker():
+            try:
+                r = requests.get(GITHUB_API_URL, timeout=8,
+                                 headers={"User-Agent": f"KickBot/{BUILD_VERSION}"})
+                if r.status_code != 200:
+                    return
+                data    = r.json()
+                tag     = data.get("tag_name", "").lstrip("v")
+                if not tag or tag <= BUILD_VERSION:
+                    return
+                assets  = data.get("assets", [])
+                exe_url = next(
+                    (a["browser_download_url"] for a in assets
+                     if a["name"].lower().endswith(".exe")),
+                    None,
+                )
+                self.after(0, lambda: self._show_update_dialog(tag, exe_url))
+            except Exception:
+                pass
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _show_update_dialog(self, new_version: str, exe_url):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Dostupna aktualizace")
+        dlg.configure(fg_color=DARK_BG)
+        dlg.resizable(False, False)
+        dlg.grab_set()
+        dlg.lift()
+        dlg.focus_force()
+        dlg.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(dlg, text="Dostupna aktualizace",
+                     font=ctk.CTkFont("", 16, "bold"), text_color=KICK_GREEN
+                     ).grid(row=0, column=0, padx=32, pady=(28, 6))
+        ctk.CTkLabel(dlg,
+                     text=f"Verze  {new_version}  je k dispozici.\nAktualni verze: {BUILD_VERSION}",
+                     font=ctk.CTkFont("", 12), text_color=TEXT_MID, justify="center"
+                     ).grid(row=1, column=0, padx=32, pady=(0, 16))
+
+        lbl_progress = ctk.CTkLabel(dlg, text="", font=ctk.CTkFont("", 11), text_color=TEXT_DIM)
+        lbl_progress.grid(row=2, column=0, padx=32, pady=(0, 4))
+
+        progress_bar = ctk.CTkProgressBar(dlg, width=300, height=8,
+                                           fg_color=CARD_BG, progress_color=KICK_GREEN)
+        progress_bar.set(0)
+        progress_bar.grid(row=3, column=0, padx=32, pady=(0, 20))
+        progress_bar.grid_remove()
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.grid(row=4, column=0, padx=32, pady=(0, 28), sticky="ew")
+        btn_row.grid_columnconfigure(0, weight=1)
+        btn_row.grid_columnconfigure(1, weight=1)
+
+        if exe_url:
+            btn_update = ctk.CTkButton(btn_row, text="Stahnout a aktualizovat",
+                          fg_color="#1e3a1e", hover_color="#2a4f2a",
+                          text_color=KICK_GREEN, border_color=KICK_GREEN, border_width=1,
+                          font=ctk.CTkFont("", 13, "bold"), height=42, corner_radius=8)
+            btn_update.configure(command=lambda: self._do_update(
+                exe_url, dlg, btn_update, lbl_progress, progress_bar))
+            btn_update.grid(row=0, column=0, padx=(0, 8), sticky="ew")
+        else:
+            ctk.CTkButton(btn_row, text="Otevrit GitHub",
+                          fg_color="#1e3a1e", hover_color="#2a4f2a",
+                          text_color=KICK_GREEN, border_color=KICK_GREEN, border_width=1,
+                          font=ctk.CTkFont("", 13, "bold"), height=42, corner_radius=8,
+                          command=lambda: webbrowser.open(
+                              f"https://github.com/{GITHUB_REPO}/releases/latest")
+                          ).grid(row=0, column=0, padx=(0, 8), sticky="ew")
+
+        ctk.CTkButton(btn_row, text="Preskocit",
+                      fg_color="transparent", hover_color=CARD_BG,
+                      text_color=TEXT_DIM, border_color=BORDER, border_width=1,
+                      font=ctk.CTkFont("", 12), height=42, corner_radius=8,
+                      command=dlg.destroy
+                      ).grid(row=0, column=1, padx=(8, 0), sticky="ew")
+
+        dlg.update_idletasks()
+        w = dlg.winfo_width(); h = dlg.winfo_height()
+        x = self.winfo_x() + (self.winfo_width()  - w) // 2
+        y = self.winfo_y() + (self.winfo_height() - h) // 2
+        dlg.geometry(f"+{x}+{y}")
+
+    def _do_update(self, exe_url: str, dlg, btn_update, lbl_progress, progress_bar):
+        if not getattr(sys, "frozen", False):
+            self._append_log(
+                "Automaticka aktualizace funguje pouze v .exe verzi.", "warn")
+            dlg.destroy()
+            return
+
+        current_exe = Path(sys.executable)
+        new_exe     = current_exe.parent / "_KickBot_update.exe"
+
+        def _worker():
+            try:
+                self.after(0, lambda: btn_update.configure(state="disabled", text="Stahuji..."))
+                self.after(0, progress_bar.grid)
+
+                r = requests.get(exe_url, stream=True, timeout=120,
+                                 headers={"User-Agent": f"KickBot/{BUILD_VERSION}"})
+                r.raise_for_status()
+                total = int(r.headers.get("content-length", 0))
+                done  = 0
+                with open(new_exe, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=65536):
+                        f.write(chunk)
+                        done += len(chunk)
+                        if total:
+                            pct = done / total
+                            self.after(0, lambda p=pct: progress_bar.set(p))
+                            self.after(0, lambda p=pct: lbl_progress.configure(
+                                text=f"Stahovani...  {p*100:.0f} %"))
+
+                self.after(0, lambda: lbl_progress.configure(
+                    text="Aktualizace stazena - restartuji..."))
+
+                bat_path = current_exe.parent / "_kickbot_upd.bat"
+                bat_path.write_text(
+                    "@echo off\r\n"
+                    "timeout /t 2 /nobreak >nul\r\n"
+                    f"move /y \"{new_exe}\" \"{current_exe}\"\r\n"
+                    f"start \"\" \"{current_exe}\"\r\n"
+                    "del \"%~f0\"\r\n",
+                    encoding="cp1250"
+                )
+
+                import subprocess as _sp
+                _sp.Popen(
+                    ["cmd", "/c", str(bat_path)],
+                    creationflags=_sp.DETACHED_PROCESS | _sp.CREATE_NEW_PROCESS_GROUP,
+                    close_fds=True,
+                )
+                self.after(500, self.destroy)
+
+            except Exception as exc:
+                self.after(0, lambda: self._append_log(
+                    f"Chyba pri aktualizaci: {exc}", "error"))
+                self.after(0, lambda: lbl_progress.configure(
+                    text=f"Chyba: {exc}", text_color=RED_ERR))
+                self.after(0, lambda: btn_update.configure(
+                    state="normal", text="Zkusit znovu"))
+                if new_exe.exists():
+                    try:
+                        new_exe.unlink()
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     # ── Config ────────────────────────────────────────────────────────────────
     def _load_config(self):
