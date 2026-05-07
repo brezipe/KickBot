@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0710"
+BUILD_VERSION = "260507.0719"
 
 DEBUG = False
 pass
@@ -1029,12 +1029,15 @@ class App(ctk.CTk):
                 pid = os.getpid()
                 ps = (
                     f"Wait-Process -Id {pid} -ErrorAction SilentlyContinue; "
-                    f"Move-Item '{app_dir}' '{old_dir}'; "
-                    f"Move-Item '{new_dir}' '{app_dir}'; "
-                    f"Remove-Item '{extract_to}' -Recurse -Force -ErrorAction SilentlyContinue; "
-                    f"Start-Process '{new_exe}'; "
-                    f"Start-Sleep 20; "
-                    f"Remove-Item '{old_dir}' -Recurse -Force -ErrorAction SilentlyContinue"
+                    f"Start-Sleep 2; "
+                    f"Move-Item '{app_dir}' '{old_dir}' -ErrorAction SilentlyContinue; "
+                    f"if ((Test-Path '{old_dir}') -and (-not (Test-Path '{app_dir}'))) {{"
+                    f"  Move-Item '{new_dir}' '{app_dir}'; "
+                    f"  Remove-Item '{extract_to}' -Recurse -Force -ErrorAction SilentlyContinue; "
+                    f"  Start-Process '{new_exe}'; "
+                    f"  Start-Sleep 20; "
+                    f"  Remove-Item '{old_dir}' -Recurse -Force -ErrorAction SilentlyContinue "
+                    f"}}"
                 )
                 _sp.Popen(["powershell", "-WindowStyle", "Hidden",
                            "-NonInteractive", "-Command", ps])
