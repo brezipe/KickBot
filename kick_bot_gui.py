@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0724"
+BUILD_VERSION = "260507.0738"
 
 DEBUG = False
 pass
@@ -1070,7 +1070,8 @@ class App(ctk.CTk):
                 )
                 log(f"Launching PowerShell (PID={pid})")
                 _sp.Popen(["powershell", "-WindowStyle", "Hidden",
-                           "-NonInteractive", "-Command", ps])
+                           "-NonInteractive", "-Command", ps],
+                          creationflags=_sp.DETACHED_PROCESS | _sp.CREATE_NEW_PROCESS_GROUP)
 
                 self.after(0, lambda: lbl_progress.configure(text="Hotovo! Spouštím novou verzi…"))
                 self.after(800, self.destroy)
