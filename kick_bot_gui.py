@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0801"
+BUILD_VERSION = "260507.0814"
 
 DEBUG = False
 pass
@@ -1047,33 +1047,40 @@ class App(ctk.CTk):
 
                 import subprocess as _sp
                 pid = os.getpid()
-                lp  = str(log_path)
-                ps = (
-                    f"Add-Content '{lp}' '[PS] Script started, waiting for PID {pid}'; "
-                    f"Wait-Process -Id {pid} -ErrorAction SilentlyContinue; "
-                    f"Add-Content '{lp}' '[PS] Process exited, sleeping 2s'; "
-                    f"Start-Sleep 2; "
-                    f"Add-Content '{lp}' '[PS] Move1 start'; "
-                    f"try {{ Move-Item '{app_dir}' '{old_dir}' -ErrorAction Stop; Add-Content '{lp}' '[PS] Move1 OK' }} "
-                    f"catch {{ Add-Content '{lp}' ('[PS] Move1 FAILED: ' + $_.Exception.Message); exit }}; "
-                    f"if ((Test-Path '{old_dir}') -and (-not (Test-Path '{app_dir}'))) {{ "
-                    f"  Add-Content '{lp}' '[PS] Move2 start'; "
-                    f"  try {{ Move-Item '{new_dir}' '{app_dir}' -ErrorAction Stop; Add-Content '{lp}' '[PS] Move2 OK' }} "
-                    f"  catch {{ Add-Content '{lp}' ('[PS] Move2 FAILED: ' + $_.Exception.Message); exit }}; "
-                    f"  Remove-Item '{extract_to}' -Recurse -Force -ErrorAction SilentlyContinue; "
-                    f"  Add-Content '{lp}' '[PS] Starting new exe'; "
-                    f"  Start-Process '{new_exe}'; "
-                    f"  Start-Sleep 20; "
-                    f"  Remove-Item '{old_dir}' -Recurse -Force -ErrorAction SilentlyContinue; "
-                    f"  Add-Content '{lp}' '[PS] Done' "
-                    f"}} else {{ "
-                    f"  Add-Content '{lp}' ('[PS] Condition FAILED: old=' + (Test-Path '{old_dir}') + ' app=' + (Test-Path '{app_dir}')) "
-                    f"}}"
+                ps1_path = parent_dir / "_kickbot_update.ps1"
+                ps1_content = (
+                    f"$log = '{log_path}'\n"
+                    f"function Log($m) {{ Add-Content $log ('[PS] ' + $m) }}\n"
+                    f"Log 'Script started, waiting for PID {pid}'\n"
+                    f"Wait-Process -Id {pid} -ErrorAction SilentlyContinue\n"
+                    f"Log 'Process exited, sleeping 2s'\n"
+                    f"Start-Sleep 2\n"
+                    f"Log 'Move1 start'\n"
+                    f"try {{ Move-Item '{app_dir}' '{old_dir}' -ErrorAction Stop; Log 'Move1 OK' }}\n"
+                    f"catch {{ Log ('Move1 FAILED: ' + $_.Exception.Message); exit 1 }}\n"
+                    f"if ((Test-Path '{old_dir}') -and (-not (Test-Path '{app_dir}'))) {{\n"
+                    f"  Log 'Move2 start'\n"
+                    f"  try {{ Move-Item '{new_dir}' '{app_dir}' -ErrorAction Stop; Log 'Move2 OK' }}\n"
+                    f"  catch {{ Log ('Move2 FAILED: ' + $_.Exception.Message); exit 1 }}\n"
+                    f"  Remove-Item '{extract_to}' -Recurse -Force -ErrorAction SilentlyContinue\n"
+                    f"  Log 'Starting new exe'\n"
+                    f"  Start-Process '{new_exe}'\n"
+                    f"  Start-Sleep 20\n"
+                    f"  Remove-Item '{old_dir}' -Recurse -Force -ErrorAction SilentlyContinue\n"
+                    f"  Log 'Done'\n"
+                    f"}} else {{\n"
+                    f"  Log ('Condition FAILED: old=' + (Test-Path '{old_dir}') + ' app=' + (Test-Path '{app_dir}'))\n"
+                    f"}}\n"
+                    f"Remove-Item '{ps1_path}' -Force -ErrorAction SilentlyContinue\n"
                 )
-                log(f"Launching PowerShell (PID={pid})")
-                _sp.Popen(["powershell", "-WindowStyle", "Hidden",
-                           "-NonInteractive", "-Command", ps],
-                          creationflags=_sp.DETACHED_PROCESS | _sp.CREATE_NEW_PROCESS_GROUP)
+                ps1_path.write_text(ps1_content, encoding="utf-8-sig")
+                log(f"Launching PowerShell -File (PID={pid})")
+                _sp.Popen(
+                    ["powershell", "-ExecutionPolicy", "Bypass",
+                     "-WindowStyle", "Hidden", "-NonInteractive",
+                     "-File", str(ps1_path)],
+                    creationflags=_sp.DETACHED_PROCESS | _sp.CREATE_NEW_PROCESS_GROUP
+                )
 
                 self.after(0, lambda: lbl_progress.configure(text="Hotovo! Spouštím novou verzi…"))
                 self.after(800, self.destroy)
