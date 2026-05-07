@@ -69,6 +69,10 @@ DEFAULT_BOT_CONFIG = {
         "vitez_nejbliz":   "🏆 Nejblíže (rozdíl: {rozdil}): {vitezove} | Správné číslo bylo: {cislo}",
         "cislo_obsazeno":  "⛔ @{username} Číslo {cislo} už zadal/a {jiny_hrac} — vyber si jiné!",
     },
+    "debug": {
+        "enabled":          False,
+        "test_server_port": 7879,
+    },
 }
 
 # Šablona která se zapíše jako bot_config.json pokud soubor neexistuje
@@ -107,6 +111,11 @@ BOT_CONFIG_TEMPLATE = {
         "vitez_nejbliz": "{vitezove} = vítězové s číslem,  {cislo} = správné číslo,  {rozdil} = rozdíl",
         "cislo_obsazeno": "{username} = hráč co psal,  {cislo} = obsazené číslo,  {jiny_hrac} = kdo ho zadal dříve",
     },
+    "debug": {
+        "_vysvetleni":      "Testovací mód — spustí lokální HTTP server pro kick_bot_test.py.",
+        "enabled":          False,
+        "test_server_port": 7879,
+    },
 }
 
 
@@ -134,6 +143,11 @@ def load_bot_config() -> dict:
                 for k, v in user[section].items():
                     if not k.startswith("_") and isinstance(v, str):
                         cfg[section][k] = v
+        # Debug sekce — přijímá bool a int
+        if "debug" in user and isinstance(user["debug"], dict):
+            for k, v in user["debug"].items():
+                if not k.startswith("_") and k in cfg["debug"]:
+                    cfg["debug"][k] = v
     except json.JSONDecodeError as e:
         print(f"[ERROR] bot_config.json má chybu: {e} — používám výchozí hodnoty")
     except Exception as e:
@@ -588,6 +602,50 @@ class App(ctk.CTk):
 
         self._build_ui()
         self._refresh_token_label()
+        # Spusť test server pokud je debug zapnutý v bot_config.json
+        debug_cfg = self.engine.bcfg.get("debug", {})
+        if debug_cfg.get("enabled", False):
+            global DEBUG
+            DEBUG = True
+            self._start_test_server(int(debug_cfg.get("test_server_port", 7879)))
+
+    # ── Test server (DEBUG) ───────────────────────────────────────────────────
+    def _start_test_server(self, port: int):
+        engine  = self.engine
+        cfg_ref = self._cfg
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                if self.path != "/simulate":
+                    self.send_response(404); self.end_headers(); return
+                try:
+                    length  = int(self.headers.get("Content-Length", 0))
+                    body    = self.rfile.read(length)
+                    data    = json.loads(body)
+                    sender  = data.get("sender", {})
+                    content = data.get("content", "")
+                    cid     = cfg_ref.get("client_id", "")
+                    cs      = cfg_ref.get("client_secret", "")
+                    engine.handle_message(sender, content, cid, cs)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{"ok":true}')
+                except Exception as e:
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": str(e)}).encode())
+
+            def log_message(self, *a): pass
+
+        try:
+            srv = HTTPServer(("localhost", port), _Handler)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            self._append_log(
+                f"🧪 [DEBUG] Test server spuštěn — localhost:{port}/simulate", "warn")
+        except Exception as e:
+            self._append_log(f"❌ Nelze spustit test server na portu {port}: {e}", "error")
 
     # ── Config ────────────────────────────────────────────────────────────────
     def _load_config(self):
