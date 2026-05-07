@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0719"
+BUILD_VERSION = "260507.0724"
 
 DEBUG = False
 pass
@@ -983,19 +983,36 @@ class App(ctk.CTk):
             return
 
         import zipfile, shutil as _shutil
-        app_dir    = Path(sys.executable).parent          # .../KickBot/
-        parent_dir = app_dir.parent                        # .../
+        app_dir    = Path(sys.executable).parent
+        parent_dir = app_dir.parent
         zip_path   = parent_dir / "_kickbot_update.zip"
         extract_to = parent_dir / "_kickbot_update"
-        new_dir    = extract_to / app_dir.name            # .../_kickbot_update/KickBot/
+        new_dir    = extract_to / app_dir.name
         old_dir    = parent_dir / "_KickBot_old"
-        new_exe    = app_dir / Path(sys.executable).name  # after rename: .../KickBot/KickBot.exe
+        new_exe    = app_dir / Path(sys.executable).name
+        log_path   = parent_dir / "kickbot_install_log.txt"
+
+        def log(msg):
+            try:
+                ts = datetime.now().strftime("%H:%M:%S")
+                with open(log_path, "a", encoding="utf-8") as _f:
+                    _f.write(f"[{ts}][PY] {msg}\n")
+            except Exception:
+                pass
 
         def _worker():
             try:
+                log(f"=== Update start: {BUILD_VERSION}")
+                log(f"app_dir   = {app_dir}")
+                log(f"parent_dir= {parent_dir}")
+                log(f"new_dir   = {new_dir}")
+                log(f"old_dir   = {old_dir}")
+                log(f"new_exe   = {new_exe}")
+
                 self.after(0, lambda: btn_update.configure(state="disabled", text="Stahuji..."))
                 self.after(0, progress_bar.grid)
 
+                log(f"Downloading: {zip_url}")
                 r = requests.get(zip_url, stream=True, timeout=180,
                                  headers={"User-Agent": f"KickBot/{BUILD_VERSION}"})
                 r.raise_for_status()
@@ -1010,35 +1027,48 @@ class App(ctk.CTk):
                             self.after(0, lambda p=pct: progress_bar.set(p))
                             self.after(0, lambda p=pct: lbl_progress.configure(
                                 text=f"Stahování…  {p*100:.0f} %"))
+                log(f"Download OK: {done} bytes")
 
                 self.after(0, lambda: lbl_progress.configure(text="Rozbaluji…"))
+                log("Extracting zip...")
                 if extract_to.exists():
                     _shutil.rmtree(extract_to)
                 new_dir.mkdir(parents=True)
                 with zipfile.ZipFile(zip_path) as z:
                     z.extractall(new_dir)
                 zip_path.unlink()
+                log(f"Extracted OK to {new_dir}")
 
                 self.after(0, lambda: lbl_progress.configure(text="Instaluji…"))
                 if old_dir.exists():
                     _shutil.rmtree(old_dir)
 
-                # Python nemůže přejmenovat vlastní složku (DLL jsou načteny).
-                # PowerShell počká na konec procesu a udělá rename + spuštění nové verze.
                 import subprocess as _sp
                 pid = os.getpid()
+                lp  = str(log_path)
                 ps = (
+                    f"Add-Content '{lp}' '[PS] Script started, waiting for PID {pid}'; "
                     f"Wait-Process -Id {pid} -ErrorAction SilentlyContinue; "
+                    f"Add-Content '{lp}' '[PS] Process exited, sleeping 2s'; "
                     f"Start-Sleep 2; "
-                    f"Move-Item '{app_dir}' '{old_dir}' -ErrorAction SilentlyContinue; "
-                    f"if ((Test-Path '{old_dir}') -and (-not (Test-Path '{app_dir}'))) {{"
-                    f"  Move-Item '{new_dir}' '{app_dir}'; "
+                    f"Add-Content '{lp}' '[PS] Move1 start'; "
+                    f"try {{ Move-Item '{app_dir}' '{old_dir}' -ErrorAction Stop; Add-Content '{lp}' '[PS] Move1 OK' }} "
+                    f"catch {{ Add-Content '{lp}' \"[PS] Move1 FAILED: $_\"; exit }}; "
+                    f"if ((Test-Path '{old_dir}') -and (-not (Test-Path '{app_dir}'))) {{ "
+                    f"  Add-Content '{lp}' '[PS] Move2 start'; "
+                    f"  try {{ Move-Item '{new_dir}' '{app_dir}' -ErrorAction Stop; Add-Content '{lp}' '[PS] Move2 OK' }} "
+                    f"  catch {{ Add-Content '{lp}' \"[PS] Move2 FAILED: $_\"; exit }}; "
                     f"  Remove-Item '{extract_to}' -Recurse -Force -ErrorAction SilentlyContinue; "
+                    f"  Add-Content '{lp}' '[PS] Starting new exe'; "
                     f"  Start-Process '{new_exe}'; "
                     f"  Start-Sleep 20; "
-                    f"  Remove-Item '{old_dir}' -Recurse -Force -ErrorAction SilentlyContinue "
+                    f"  Remove-Item '{old_dir}' -Recurse -Force -ErrorAction SilentlyContinue; "
+                    f"  Add-Content '{lp}' '[PS] Done' "
+                    f"}} else {{ "
+                    f"  Add-Content '{lp}' \"[PS] Condition FAILED: old=$(Test-Path '{old_dir}') app=$(Test-Path '{app_dir}')\" "
                     f"}}"
                 )
+                log(f"Launching PowerShell (PID={pid})")
                 _sp.Popen(["powershell", "-WindowStyle", "Hidden",
                            "-NonInteractive", "-Command", ps])
 
@@ -1046,6 +1076,7 @@ class App(ctk.CTk):
                 self.after(800, self.destroy)
 
             except Exception as exc:
+                log(f"EXCEPTION: {exc}")
                 self.after(0, lambda: self._append_log(
                     f"Chyba při aktualizaci: {exc}", "error"))
                 self.after(0, lambda: lbl_progress.configure(
