@@ -1,5 +1,6 @@
 import datetime
 import subprocess
+import shutil
 import re
 import os
 import sys
@@ -7,8 +8,6 @@ import sys
 # 1. Vygenerování verze podle aktuálního času (např. 26.04.30.1420)
 new_version = datetime.datetime.now().strftime("%y%m%d.%H%M")
 print(f"--- Generuji verzi: {new_version} ---")
-
-exe_name = f"KickBot_{new_version.replace('.', '_')}"
 
 # 2. Aktualizace BUILD_VERSION v kick_bot_gui.py
 main_script = "kick_bot_gui.py"
@@ -30,9 +29,9 @@ else:
 print("--- Spouštím PyInstaller... ---")
 cmd = [
     sys.executable, "-m", "PyInstaller",
-    "--onefile",
+    "--onedir",
     "--noconsole",
-    "--name", exe_name,
+    "--name", "KickBot",
     "--collect-all", "customtkinter",
     "--collect-all", "darkdetect",
     "--hidden-import", "curl_cffi",
@@ -47,6 +46,9 @@ cmd.append(main_script)
 
 try:
     subprocess.run(cmd, check=True)
-    print(f"\n--- HOTOVO! Soubor {exe_name}.exe najdeš ve složce dist ---")
+    print("--- PyInstaller dokončen, zipuji výstup... ---")
+    zip_out = os.path.join("dist", "KickBot")
+    shutil.make_archive(zip_out, "zip", os.path.join("dist", "KickBot"))
+    print(f"\n--- HOTOVO! dist/KickBot.zip (verze {new_version}) ---")
 except subprocess.CalledProcessError:
     print("\n--- CHYBA: PyInstaller selhal! ---")

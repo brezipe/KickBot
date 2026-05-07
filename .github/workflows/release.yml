@@ -54,7 +54,7 @@ jobs:
         shell: pwsh
         run: |
           python -m PyInstaller `
-            --onefile --noconsole `
+            --onedir --noconsole `
             --name KickBot `
             --collect-all customtkinter `
             --collect-all darkdetect `
@@ -63,6 +63,11 @@ jobs:
             --hidden-import requests `
             kick_bot_gui.py
 
+      - name: Zip output
+        if: steps.skip.outputs.skip != 'true'
+        shell: pwsh
+        run: Compress-Archive -Path "dist\KickBot\*" -DestinationPath "dist\KickBot.zip"
+
       - name: Create GitHub Release
         if: steps.skip.outputs.skip != 'true'
         shell: pwsh
@@ -70,6 +75,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $v = "${{ steps.ver.outputs.version }}"
-          gh release create "v$v" "dist/KickBot.exe" `
+          gh release create "v$v" "dist/KickBot.zip" `
             --title "KickBot $v" `
             --notes "Automatický release verze $v."

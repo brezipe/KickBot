@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0558"
+BUILD_VERSION = "260507.0616"
 
 DEBUG = False
 
@@ -624,7 +624,7 @@ class App(ctk.CTk):
             self.after(100, self._toggle_log)
         # Ukliď pozůstatek po aktualizaci; do té doby zablokuj zavření okna
         if getattr(sys, "frozen", False) and (
-                Path(sys.executable).parent / "_KickBot_old.exe").exists():
+                Path(sys.executable).parent.parent / "_KickBot_old").exists():
             self.protocol("WM_DELETE_WINDOW", lambda: None)
         self.after(3000, self._cleanup_old_exe)
         # První spuštění — nabídni nastavení (výjimka AV, zástupce na ploše)
@@ -768,10 +768,11 @@ class App(ctk.CTk):
     def _cleanup_old_exe(self, attempt: int = 0):
         if not getattr(sys, "frozen", False):
             return
-        old = Path(sys.executable).parent / "_KickBot_old.exe"
+        import shutil
+        old = Path(sys.executable).parent.parent / "_KickBot_old"
         if old.exists():
             try:
-                old.unlink()
+                shutil.rmtree(old)
             except Exception:
                 if attempt < 5:
                     self.after(2000, lambda: self._cleanup_old_exe(attempt + 1))
@@ -901,17 +902,17 @@ class App(ctk.CTk):
                 if not tag or tag <= BUILD_VERSION:
                     return
                 assets  = data.get("assets", [])
-                exe_url = next(
+                zip_url = next(
                     (a["browser_download_url"] for a in assets
-                     if a["name"].lower().endswith(".exe")),
+                     if a["name"].lower().endswith(".zip")),
                     None,
                 )
-                self.after(0, lambda: self._show_update_dialog(tag, exe_url))
+                self.after(0, lambda: self._show_update_dialog(tag, zip_url))
             except Exception:
                 pass
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _show_update_dialog(self, new_version: str, exe_url):
+    def _show_update_dialog(self, new_version: str, zip_url):
         dlg = ctk.CTkToplevel(self)
         dlg.title("Dostupná aktualizace")
         dlg.configure(fg_color=DARK_BG)
@@ -943,13 +944,13 @@ class App(ctk.CTk):
         btn_row.grid_columnconfigure(0, weight=1)
         btn_row.grid_columnconfigure(1, weight=1)
 
-        if exe_url:
+        if zip_url:
             btn_update = ctk.CTkButton(btn_row, text="Stáhnout a aktualizovat",
                           fg_color="#1e3a1e", hover_color="#2a4f2a",
                           text_color=KICK_GREEN, border_color=KICK_GREEN, border_width=1,
                           font=ctk.CTkFont("", 13, "bold"), height=42, corner_radius=8)
             btn_update.configure(command=lambda: self._do_update(
-                exe_url, dlg, btn_update, lbl_progress, progress_bar))
+                zip_url, dlg, btn_update, lbl_progress, progress_bar))
             btn_update.grid(row=0, column=0, padx=(0, 8), sticky="ew")
         else:
             ctk.CTkButton(btn_row, text="Otevřít GitHub",
@@ -973,28 +974,33 @@ class App(ctk.CTk):
         y = self.winfo_y() + (self.winfo_height() - h) // 2
         dlg.geometry(f"+{x}+{y}")
 
-    def _do_update(self, exe_url: str, dlg, btn_update, lbl_progress, progress_bar):
+    def _do_update(self, zip_url: str, dlg, btn_update, lbl_progress, progress_bar):
         if not getattr(sys, "frozen", False):
             self._append_log(
                 "Automatická aktualizace funguje pouze v .exe verzi.", "warn")
             dlg.destroy()
             return
 
-        current_exe = Path(sys.executable)
-        new_exe     = current_exe.parent / "_KickBot_update.exe"
-        old_exe     = current_exe.parent / "_KickBot_old.exe"
+        import zipfile, shutil as _shutil
+        app_dir    = Path(sys.executable).parent          # .../KickBot/
+        parent_dir = app_dir.parent                        # .../
+        zip_path   = parent_dir / "_kickbot_update.zip"
+        extract_to = parent_dir / "_kickbot_update"
+        new_dir    = extract_to / app_dir.name            # .../_kickbot_update/KickBot/
+        old_dir    = parent_dir / "_KickBot_old"
+        new_exe    = app_dir / Path(sys.executable).name  # after rename: .../KickBot/KickBot.exe
 
         def _worker():
             try:
                 self.after(0, lambda: btn_update.configure(state="disabled", text="Stahuji..."))
                 self.after(0, progress_bar.grid)
 
-                r = requests.get(exe_url, stream=True, timeout=120,
+                r = requests.get(zip_url, stream=True, timeout=180,
                                  headers={"User-Agent": f"KickBot/{BUILD_VERSION}"})
                 r.raise_for_status()
                 total = int(r.headers.get("content-length", 0))
                 done  = 0
-                with open(new_exe, "wb") as f:
+                with open(zip_path, "wb") as f:
                     for chunk in r.iter_content(chunk_size=65536):
                         f.write(chunk)
                         done += len(chunk)
@@ -1004,16 +1010,24 @@ class App(ctk.CTk):
                             self.after(0, lambda p=pct: lbl_progress.configure(
                                 text=f"Stahování…  {p*100:.0f} %"))
 
-                self.after(0, lambda: lbl_progress.configure(text="Instaluji…"))
+                self.after(0, lambda: lbl_progress.configure(text="Rozbaluji…"))
+                if extract_to.exists():
+                    _shutil.rmtree(extract_to)
+                new_dir.mkdir(parents=True)
+                with zipfile.ZipFile(zip_path) as z:
+                    z.extractall(new_dir)
+                zip_path.unlink()
 
-                # Windows dovoli prejmenovani i beziciho exe (meni jen zaznam v adresari)
-                if old_exe.exists():
-                    old_exe.unlink()
-                current_exe.rename(old_exe)   # KickBot.exe → _KickBot_old.exe
-                new_exe.rename(current_exe)   # _KickBot_update.exe → KickBot.exe
+                self.after(0, lambda: lbl_progress.configure(text="Instaluji…"))
+                # Rename app folder (Windows allows renaming folder with running exe)
+                if old_dir.exists():
+                    _shutil.rmtree(old_dir)
+                app_dir.rename(old_dir)      # KickBot/ → _KickBot_old/
+                new_dir.rename(app_dir)      # _kickbot_update/KickBot/ → KickBot/
+                extract_to.rmdir()           # remove empty _kickbot_update/
 
                 import subprocess as _sp
-                _sp.Popen([str(current_exe)], close_fds=True)
+                _sp.Popen([str(new_exe)], close_fds=True)
 
                 self.after(0, lambda: lbl_progress.configure(text="Hotovo! Spouštím novou verzi…"))
                 self.after(800, self.destroy)
@@ -1025,11 +1039,13 @@ class App(ctk.CTk):
                     text=f"Chyba: {exc}", text_color=RED_ERR))
                 self.after(0, lambda: btn_update.configure(
                     state="normal", text="Zkusit znovu"))
-                if new_exe.exists():
-                    try:
-                        new_exe.unlink()
-                    except Exception:
-                        pass
+                try:
+                    if zip_path.exists():
+                        zip_path.unlink()
+                    if extract_to.exists():
+                        _shutil.rmtree(extract_to)
+                except Exception:
+                    pass
 
         threading.Thread(target=_worker, daemon=True).start()
 
