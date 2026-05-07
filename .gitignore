@@ -4,3 +4,5 @@ lode/
 *.json
 *.spec
 claude_notes.txt
+__pycache__/
+.claude/
