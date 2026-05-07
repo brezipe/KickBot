@@ -66,7 +66,7 @@ jobs:
       - name: Zip output
         if: steps.skip.outputs.skip != 'true'
         shell: pwsh
-        run: Compress-Archive -Path "dist\KickBot\*" -DestinationPath "dist\KickBot.zip"
+        run: Compress-Archive -Path "dist\KickBot\*" -DestinationPath "dist\KickBot.zip" -Force
 
       - name: Create GitHub Release
         if: steps.skip.outputs.skip != 'true'
