@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260506.2353"
+BUILD_VERSION = "260507.0239"
 
 DEBUG = False
 
@@ -673,9 +673,16 @@ class App(ctk.CTk):
         self._build_right_panel()
 
     def _build_sidebar(self):
-        sb = ctk.CTkFrame(self, fg_color=PANEL_BG, corner_radius=0, width=280)
+        outer = ctk.CTkFrame(self, fg_color=PANEL_BG, corner_radius=0, width=280)
+        outer.grid(row=0, column=0, sticky="nsew")
+        outer.grid_propagate(False)
+        outer.grid_columnconfigure(0, weight=1)
+        outer.grid_rowconfigure(0, weight=1)
+
+        sb = ctk.CTkScrollableFrame(outer, fg_color=PANEL_BG, corner_radius=0,
+                                     scrollbar_button_color=BORDER,
+                                     scrollbar_fg_color=PANEL_BG)
         sb.grid(row=0, column=0, sticky="nsew")
-        sb.grid_propagate(False)
         sb.grid_columnconfigure(0, weight=1)
 
         # Logo
@@ -755,8 +762,6 @@ class App(ctk.CTk):
             font=ctk.CTkFont("", 11), height=30, corner_radius=8,
             command=self._reload_bot_config)
         self.btn_reload_cfg.grid(row=20, column=0, padx=16, pady=(0, 8), sticky="ew")
-
-        sb.grid_rowconfigure(21, weight=1)
 
         ctk.CTkButton(sb, text="❓ Jak získat Client ID?",
             fg_color="transparent", hover_color=CARD_BG, text_color=TEXT_DIM,
