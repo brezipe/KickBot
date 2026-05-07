@@ -789,7 +789,7 @@ class App(ctk.CTk):
 
     def _show_first_run_dialog(self, flag: Path):
         dlg = ctk.CTkToplevel(self)
-        dlg.title("Nastaveni KickBotu")
+        dlg.title("Nastavení KickBotu")
         dlg.configure(fg_color=DARK_BG)
         dlg.resizable(False, False)
         dlg.grab_set()
@@ -797,7 +797,7 @@ class App(ctk.CTk):
         dlg.focus_force()
         dlg.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(dlg, text="Vitej v KickBotu!",
+        ctk.CTkLabel(dlg, text="Vítej v KickBotu!",
                      font=ctk.CTkFont("", 16, "bold"), text_color=KICK_GREEN
                      ).grid(row=0, column=0, padx=32, pady=(28, 6))
         ctk.CTkLabel(dlg,
@@ -829,7 +829,7 @@ class App(ctk.CTk):
         def _finish():
             flag.touch()
             if var_defender.get():
-                lbl_status.configure(text="Ceka na potvrzeni UAC...")
+                lbl_status.configure(text="Čeká na potvrzení UAC…")
                 dlg.update()
                 self._add_defender_exclusion()
             if var_shortcut.get():
@@ -847,7 +847,7 @@ class App(ctk.CTk):
                       font=ctk.CTkFont("", 13, "bold"), height=42, corner_radius=8,
                       command=_finish
                       ).grid(row=0, column=0, padx=(0, 8), sticky="ew")
-        ctk.CTkButton(btn_row, text="Preskocit",
+        ctk.CTkButton(btn_row, text="Přeskočit",
                       fg_color="transparent", hover_color=CARD_BG,
                       text_color=TEXT_DIM, border_color=BORDER, border_width=1,
                       font=ctk.CTkFont("", 12), height=42, corner_radius=8,
@@ -885,9 +885,9 @@ class App(ctk.CTk):
             import subprocess as _sp
             _sp.run(["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
                     capture_output=True, timeout=10)
-            self._append_log("Zastupce na plose vytvoren.", "success")
+            self._append_log("Zástupce na ploše vytvořen.", "success")
         except Exception as exc:
-            self._append_log(f"Nelze vytvorit zastupce: {exc}", "warn")
+            self._append_log(f"Nelze vytvořit zástupce: {exc}", "warn")
 
     # ── Auto-update ───────────────────────────────────────────────────────────
     def _check_for_update(self):
@@ -914,7 +914,7 @@ class App(ctk.CTk):
 
     def _show_update_dialog(self, new_version: str, exe_url):
         dlg = ctk.CTkToplevel(self)
-        dlg.title("Dostupna aktualizace")
+        dlg.title("Dostupná aktualizace")
         dlg.configure(fg_color=DARK_BG)
         dlg.resizable(False, False)
         dlg.grab_set()
@@ -922,7 +922,7 @@ class App(ctk.CTk):
         dlg.focus_force()
         dlg.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(dlg, text="Dostupna aktualizace",
+        ctk.CTkLabel(dlg, text="Dostupná aktualizace",
                      font=ctk.CTkFont("", 16, "bold"), text_color=KICK_GREEN
                      ).grid(row=0, column=0, padx=32, pady=(28, 6))
         ctk.CTkLabel(dlg,
@@ -945,7 +945,7 @@ class App(ctk.CTk):
         btn_row.grid_columnconfigure(1, weight=1)
 
         if exe_url:
-            btn_update = ctk.CTkButton(btn_row, text="Stahnout a aktualizovat",
+            btn_update = ctk.CTkButton(btn_row, text="Stáhnout a aktualizovat",
                           fg_color="#1e3a1e", hover_color="#2a4f2a",
                           text_color=KICK_GREEN, border_color=KICK_GREEN, border_width=1,
                           font=ctk.CTkFont("", 13, "bold"), height=42, corner_radius=8)
@@ -953,7 +953,7 @@ class App(ctk.CTk):
                 exe_url, dlg, btn_update, lbl_progress, progress_bar))
             btn_update.grid(row=0, column=0, padx=(0, 8), sticky="ew")
         else:
-            ctk.CTkButton(btn_row, text="Otevrit GitHub",
+            ctk.CTkButton(btn_row, text="Otevřít GitHub",
                           fg_color="#1e3a1e", hover_color="#2a4f2a",
                           text_color=KICK_GREEN, border_color=KICK_GREEN, border_width=1,
                           font=ctk.CTkFont("", 13, "bold"), height=42, corner_radius=8,
@@ -961,7 +961,7 @@ class App(ctk.CTk):
                               f"https://github.com/{GITHUB_REPO}/releases/latest")
                           ).grid(row=0, column=0, padx=(0, 8), sticky="ew")
 
-        ctk.CTkButton(btn_row, text="Preskocit",
+        ctk.CTkButton(btn_row, text="Přeskočit",
                       fg_color="transparent", hover_color=CARD_BG,
                       text_color=TEXT_DIM, border_color=BORDER, border_width=1,
                       font=ctk.CTkFont("", 12), height=42, corner_radius=8,
@@ -977,7 +977,7 @@ class App(ctk.CTk):
     def _do_update(self, exe_url: str, dlg, btn_update, lbl_progress, progress_bar):
         if not getattr(sys, "frozen", False):
             self._append_log(
-                "Automaticka aktualizace funguje pouze v .exe verzi.", "warn")
+                "Automatická aktualizace funguje pouze v .exe verzi.", "warn")
             dlg.destroy()
             return
 
@@ -1003,9 +1003,9 @@ class App(ctk.CTk):
                             pct = done / total
                             self.after(0, lambda p=pct: progress_bar.set(p))
                             self.after(0, lambda p=pct: lbl_progress.configure(
-                                text=f"Stahovani...  {p*100:.0f} %"))
+                                text=f"Stahování…  {p*100:.0f} %"))
 
-                self.after(0, lambda: lbl_progress.configure(text="Instaluji..."))
+                self.after(0, lambda: lbl_progress.configure(text="Instaluji…"))
 
                 # Windows dovoli prejmenovani i beziciho exe (meni jen zaznam v adresari)
                 if old_exe.exists():
@@ -1016,12 +1016,12 @@ class App(ctk.CTk):
                 import subprocess as _sp
                 _sp.Popen([str(current_exe)], close_fds=True)
 
-                self.after(0, lambda: lbl_progress.configure(text="Hotovo! Spoustim novou verzi..."))
+                self.after(0, lambda: lbl_progress.configure(text="Hotovo! Spouštím novou verzi…"))
                 self.after(800, self.destroy)
 
             except Exception as exc:
                 self.after(0, lambda: self._append_log(
-                    f"Chyba pri aktualizaci: {exc}", "error"))
+                    f"Chyba při aktualizaci: {exc}", "error"))
                 self.after(0, lambda: lbl_progress.configure(
                     text=f"Chyba: {exc}", text_color=RED_ERR))
                 self.after(0, lambda: btn_update.configure(
