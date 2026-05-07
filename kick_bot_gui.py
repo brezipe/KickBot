@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0753"
+BUILD_VERSION = "260507.0758"
 
 DEBUG = False
 
@@ -891,6 +891,8 @@ class App(ctk.CTk):
 
     # ── Auto-update ───────────────────────────────────────────────────────────
     def _check_for_update(self):
+        if getattr(sys, "frozen", False) and not (Path(sys.executable).parent / ".configured").exists():
+            return
         def _worker():
             try:
                 r = requests.get(GITHUB_API_URL, timeout=8,
