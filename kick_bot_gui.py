@@ -766,7 +766,7 @@ class App(ctk.CTk):
         except Exception as e:
             self._append_log(f"❌ Chyba při opravě configu: {e}", "error")
 
-    def _cleanup_old_exe(self):
+    def _cleanup_old_exe(self, attempt: int = 0):
         if not getattr(sys, "frozen", False):
             return
         old = Path(sys.executable).parent / "_KickBot_old.exe"
@@ -774,8 +774,9 @@ class App(ctk.CTk):
             try:
                 old.unlink()
             except Exception:
-                self.after(2000, self._cleanup_old_exe)
-                return
+                if attempt < 5:
+                    self.after(2000, lambda: self._cleanup_old_exe(attempt + 1))
+                    return
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
     # ── První spuštění ────────────────────────────────────────────────────────
