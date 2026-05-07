@@ -623,6 +623,8 @@ class App(ctk.CTk):
         # Aplikuj výchozí stav protokolu z bot_config.json
         if self.engine.bcfg.get("gui", {}).get("log_collapsed", True):
             self.after(100, self._toggle_log)
+        # Ukliď pozůstatek po aktualizaci
+        self.after(3000, self._cleanup_old_exe)
         # První spuštění — nabídni nastavení (výjimka AV, zástupce na ploše)
         self.after(50, self._check_first_run)
         # Zkontroluj kompatibilitu bot_config.json
@@ -760,6 +762,16 @@ class App(ctk.CTk):
             self.engine.reload_bot_config()
         except Exception as e:
             self._append_log(f"❌ Chyba při opravě configu: {e}", "error")
+
+    def _cleanup_old_exe(self):
+        if not getattr(sys, "frozen", False):
+            return
+        old = Path(sys.executable).parent / "_KickBot_old.exe"
+        if old.exists():
+            try:
+                old.unlink()
+            except Exception:
+                pass
 
     # ── První spuštění ────────────────────────────────────────────────────────
     def _check_first_run(self):
@@ -966,8 +978,6 @@ class App(ctk.CTk):
         current_exe = Path(sys.executable)
         new_exe     = current_exe.parent / "_KickBot_update.exe"
         old_exe     = current_exe.parent / "_KickBot_old.exe"
-        exe_dir     = str(current_exe.parent)
-        exe_name    = current_exe.name
 
         def _worker():
             try:
@@ -989,27 +999,19 @@ class App(ctk.CTk):
                             self.after(0, lambda p=pct: lbl_progress.configure(
                                 text=f"Stahovani...  {p*100:.0f} %"))
 
-                self.after(0, lambda: lbl_progress.configure(
-                    text="Aktualizace stazena - restartuji..."))
+                self.after(0, lambda: lbl_progress.configure(text="Instaluji..."))
 
-                # PowerShell: Rename-Item funguje i na bezicim exe, move /y ne
-                ps = (
-                    "Start-Sleep -Seconds 3; "
-                    f"$d = '{exe_dir}'; "
-                    f"Remove-Item (Join-Path $d '_KickBot_old.exe') -ErrorAction SilentlyContinue; "
-                    f"Rename-Item (Join-Path $d '{exe_name}') '_KickBot_old.exe' -Force; "
-                    f"Rename-Item (Join-Path $d '_KickBot_update.exe') '{exe_name}' -Force; "
-                    f"Start-Process (Join-Path $d '{exe_name}'); "
-                    "Start-Sleep -Seconds 2; "
-                    f"Remove-Item (Join-Path $d '_KickBot_old.exe') -ErrorAction SilentlyContinue"
-                )
+                # Windows dovoli prejmenovani i beziciho exe (meni jen zaznam v adresari)
+                if old_exe.exists():
+                    old_exe.unlink()
+                current_exe.rename(old_exe)   # KickBot.exe → _KickBot_old.exe
+                new_exe.rename(current_exe)   # _KickBot_update.exe → KickBot.exe
+
                 import subprocess as _sp
-                _sp.Popen(
-                    ["powershell", "-ExecutionPolicy", "Bypass",
-                     "-WindowStyle", "Hidden", "-Command", ps],
-                    creationflags=_sp.DETACHED_PROCESS | _sp.CREATE_NEW_PROCESS_GROUP,
-                )
-                self.after(1000, self.destroy)
+                _sp.Popen([str(current_exe)], close_fds=True)
+
+                self.after(0, lambda: lbl_progress.configure(text="Hotovo! Spoustim novou verzi..."))
+                self.after(800, self.destroy)
 
             except Exception as exc:
                 self.after(0, lambda: self._append_log(
