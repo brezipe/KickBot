@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0640"
+BUILD_VERSION = "260507.0645"
 
 DEBUG = False
 
@@ -1019,9 +1019,10 @@ class App(ctk.CTk):
                 zip_path.unlink()
 
                 self.after(0, lambda: lbl_progress.configure(text="Instaluji…"))
-                # Rename app folder (Windows allows renaming folder with running exe)
                 if old_dir.exists():
                     _shutil.rmtree(old_dir)
+                # Opustíme app_dir jako CWD — Windows neumí přejmenovat aktuální pracovní adresář
+                os.chdir(str(parent_dir))
                 app_dir.rename(old_dir)      # KickBot/ → _KickBot_old/
                 new_dir.rename(app_dir)      # _kickbot_update/KickBot/ → KickBot/
                 extract_to.rmdir()           # remove empty _kickbot_update/
