@@ -15,7 +15,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "260507.0402"
+BUILD_VERSION = "260515.1801"
 
 DEBUG = False
 
@@ -68,6 +68,8 @@ DEFAULT_BOT_CONFIG = {
         "vitez_presny":    "🎯 PŘESNÝ ZÁSAH! {vitezove} | Správné číslo bylo: {cislo}",
         "vitez_nejbliz":   "🏆 Nejblíže (rozdíl: {rozdil}): {vitezove} | Správné číslo bylo: {cislo}",
         "cislo_obsazeno":  "⛔ @{username} Číslo {cislo} už zadal/a {jiny_hrac} — vyber si jiné!",
+        "top3":            "📊 Top 3: {seznam}",
+        "top3_presny":     "🎯 Přesný: {vitez} | Další: {dalsi}",
     },
     "debug": {
         "enabled":          False,
@@ -75,6 +77,7 @@ DEFAULT_BOT_CONFIG = {
     },
     "gui": {
         "log_collapsed": True,
+        "odeslat_top3":  True,
     },
 }
 
@@ -104,6 +107,8 @@ BOT_CONFIG_TEMPLATE = {
         "vitez_presny":    "🎯 PŘESNÝ ZÁSAH! {vitezove} | Správné číslo bylo: {cislo}",
         "vitez_nejbliz":   "🏆 Nejblíže (rozdíl: {rozdil}): {vitezove} | Správné číslo bylo: {cislo}",
         "cislo_obsazeno":  "⛔ @{username} Číslo {cislo} už zadal/a {jiny_hrac} — vyber si jiné!",
+        "top3":            "📊 Top 3: {seznam}",
+        "top3_presny":     "🎯 Přesný: {vitez} | Další: {dalsi}",
     },
     "_napoveda_promennych": {
         "popis": "Tyto proměnné musí zůstat v příslušných zprávách:",
@@ -113,6 +118,8 @@ BOT_CONFIG_TEMPLATE = {
         "vitez_presny":  "{vitezove} = vítězové s číslem,  {cislo} = správné číslo",
         "vitez_nejbliz": "{vitezove} = vítězové s číslem,  {cislo} = správné číslo,  {rozdil} = rozdíl",
         "cislo_obsazeno": "{username} = hráč co psal,  {cislo} = obsazené číslo,  {jiny_hrac} = kdo ho zadal dříve",
+        "top3":          "{seznam} = automatický seznam Top 3 (🥇 user [číslo] ±rozdíl ...)",
+        "top3_presny":   "{vitez} = hráč(i) s přesným tipem,  {dalsi} = 2. a 3. místo",
     },
     "debug": {
         "_vysvetleni":      "Testovací mód — spustí lokální HTTP server pro kick_bot_test.py.",
@@ -122,6 +129,7 @@ BOT_CONFIG_TEMPLATE = {
     "gui": {
         "_vysvetleni":  "Nastavení vzhledu a chování rozhraní.",
         "log_collapsed": True,
+        "odeslat_top3":  True,
     },
 }
 
@@ -156,6 +164,23 @@ def load_bot_config() -> dict:
                 for k, v in user[section].items():
                     if not k.startswith("_") and k in cfg[section]:
                         cfg[section][k] = v
+
+        # Auto-migrace: doplň chybějící sekce a klíče z šablony
+        changed = False
+        for section, tpl_vals in BOT_CONFIG_TEMPLATE.items():
+            if not isinstance(tpl_vals, dict):
+                continue
+            if section not in user:
+                user[section] = {}
+                changed = True
+            for k, v in tpl_vals.items():
+                if k not in user[section]:
+                    user[section][k] = v
+                    changed = True
+        if changed:
+            BOT_CONFIG_FILE.write_text(
+                json.dumps(user, ensure_ascii=False, indent=2), encoding="utf-8")
+            print("[INFO] bot_config.json aktualizován o nové klíče")
     except json.JSONDecodeError as e:
         print(f"[ERROR] bot_config.json má chybu: {e} — používám výchozí hodnoty")
     except Exception as e:
@@ -494,7 +519,7 @@ class BotEngine:
                     self.log(f"  {username} → {guess}  (byl: {prev})", "dim")
                 self.guess_cb(sorted(self.guesses.items()))
 
-    def _evaluate(self, correct, client_id, client_secret):
+    def _evaluate(self, correct, client_id, client_secret, send_top3=False):
         self.log(f"━━━ Vyhodnocení — správné číslo: {correct} ━━━", "success")
         if not self.guesses:
             self.send_chat(self._msg("zadne_odhady"), client_id, client_secret)
@@ -511,6 +536,31 @@ class BotEngine:
             msg = self._msg("vitez_nejbliz", vitezove=wstr, cislo=correct, rozdil=min_dist)
 
         self.send_chat(msg, client_id, client_secret)
+
+        if send_top3:
+            top3 = sorted(distances.items(), key=lambda x: x[1])[:3]
+            if len(top3) > 1:
+                medals = ["🥇", "🥈", "🥉"]
+                if min_dist == 0:
+                    vitez_str = ", ".join(
+                        f"{u} [{self.guesses[u]}]" for u, d in top3 if d == 0)
+                    dalsi = [(u, d) for u, d in top3 if d != 0]
+                    offset = sum(1 for _, d in top3 if d == 0)
+                    dalsi_parts = [
+                        f"{medals[offset + i]} {u} [{self.guesses[u]}] ±{d}"
+                        for i, (u, d) in enumerate(dalsi)
+                        if offset + i < 3
+                    ]
+                    msg_top3 = self._msg("top3_presny",
+                        vitez=vitez_str, dalsi=" | ".join(dalsi_parts))
+                else:
+                    parts = [
+                        f"{medals[i]} {u} [{self.guesses[u]}] ±{d}"
+                        for i, (u, d) in enumerate(top3)
+                    ]
+                    msg_top3 = self._msg("top3", seznam=" | ".join(parts))
+                self.send_chat(msg_top3, client_id, client_secret)
+
         for u, g in winners:
             self.log(f"  🏆 {u} → {g}", "success")
         self.status_cb("done")
@@ -984,19 +1034,27 @@ class App(ctk.CTk):
             height=40, corner_radius=6, placeholder_text="např. 254")
         self.entry_winner_num.grid(row=8, column=0, padx=16, pady=(0, 8), sticky="ew")
 
-        self.btn_evaluate = ctk.CTkButton(rp, text="🏆  Zobraz výsledek",
+        self.btn_evaluate = ctk.CTkButton(rp, text="Zobraz výsledek",
             fg_color="#1e2a3a", hover_color="#2a3a4f", text_color="#4da6ff",
             border_color="#2a4a6a", border_width=1,
             font=ctk.CTkFont("", 13, "bold"), height=44, corner_radius=8,
             command=self._panel_evaluate)
-        self.btn_evaluate.grid(row=9, column=0, padx=16, pady=(0, 16), sticky="ew")
+        self.btn_evaluate.grid(row=9, column=0, padx=16, pady=(0, 8), sticky="ew")
 
-        ctk.CTkFrame(rp, height=1, fg_color=BORDER).grid(row=10, column=0, sticky="ew", padx=16, pady=(0, 12))
+        _top3_default = self.engine.bcfg.get("gui", {}).get("odeslat_top3", True)
+        self.chk_top3_var = ctk.BooleanVar(value=_top3_default)
+        self.chk_top3 = ctk.CTkCheckBox(rp, text="Odeslat Top 3 do chatu",
+            variable=self.chk_top3_var,
+            font=ctk.CTkFont("", 12), text_color=TEXT_MID,
+            fg_color="#2a4a6a", hover_color="#3a5a7a", checkmark_color=TEXT_BRIGHT,
+            corner_radius=4)
+        self.chk_top3.grid(row=10, column=0, padx=18, pady=(0, 6), sticky="w")
 
-        self._section(rp, "VÝSLEDKY — TOP 3", 11)
+        ctk.CTkLabel(rp, text="Výherci", font=ctk.CTkFont("", 11, "bold"),
+                     text_color=TEXT_DIM).grid(row=11, column=0, padx=16, pady=(6, 2), sticky="w")
 
         self.results_frame = ctk.CTkFrame(rp, fg_color="transparent")
-        self.results_frame.grid(row=12, column=0, sticky="nsew", padx=8, pady=(4, 8))
+        self.results_frame.grid(row=12, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.results_frame.grid_columnconfigure(0, weight=1)
 
         self.lbl_results_placeholder = ctk.CTkLabel(self.results_frame,
@@ -1005,7 +1063,7 @@ class App(ctk.CTk):
         self.lbl_results_placeholder.grid(row=0, column=0, pady=16)
 
         self._result_rows = []
-        rp.grid_rowconfigure(12, weight=1)
+        rp.grid_rowconfigure(13, weight=1)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _section(self, parent, text, row):
@@ -1147,7 +1205,15 @@ class App(ctk.CTk):
             self._append_log("Neplatné číslo — zadej celé číslo.", "error"); return
         cid = self.entry_cid.get().strip()
         cs  = self.entry_csecret.get().strip()
-        self.engine._evaluate(n, cid, cs)
+
+        self.btn_evaluate.configure(state="disabled", text="Zpracovávám...")
+
+        def run():
+            self.engine._evaluate(n, cid, cs, send_top3=self.chk_top3_var.get())
+            self.after(0, lambda: self.btn_evaluate.configure(
+                state="normal", text="Zobraz výsledek"))
+
+        threading.Thread(target=run, daemon=True).start()
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
     def _append_log(self, msg, level="info"):

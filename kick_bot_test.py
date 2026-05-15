@@ -194,11 +194,12 @@ class App(ctk.CTk):
         saved = self._cfg.get("users", [])
         while len(self._user_rows) < n:
             idx    = len(self._user_rows)
-            name   = saved[idx]["name"] if idx < len(saved) else f"Hráč{idx + 1}"
+            name   = saved[idx]["name"]           if idx < len(saved) else f"Hráč{idx + 1}"
+            msg    = saved[idx].get("msg", "")    if idx < len(saved) else ""
             is_mod = saved[idx].get("is_mod", False) if idx < len(saved) else False
-            self._add_user_row(idx, name, is_mod)
+            self._add_user_row(idx, name, msg, is_mod)
 
-    def _add_user_row(self, idx: int, default_name: str = "", default_mod: bool = False):
+    def _add_user_row(self, idx: int, default_name: str = "", default_msg: str = "", default_mod: bool = False):
         row_f = ctk.CTkFrame(self.users_scroll,
                              fg_color=CARD_BG if idx % 2 == 0 else PANEL_BG,
                              corner_radius=6, height=48)
@@ -220,6 +221,7 @@ class App(ctk.CTk):
         msg_e = ctk.CTkEntry(row_f, fg_color=DARK_BG, border_color=BORDER,
                               text_color=TEXT_BRIGHT, font=ctk.CTkFont("", 12),
                               height=30, corner_radius=5, placeholder_text="Zpráva do chatu…")
+        msg_e.insert(0, default_msg)
         msg_e.grid(row=0, column=2, padx=(0, 6), pady=9, sticky="ew")
         msg_e.bind("<Return>", lambda e, i=idx: self._send(i))
 
@@ -263,6 +265,7 @@ class App(ctk.CTk):
                 badge_str = " [MOD]" if is_mod else ""
                 if r.ok:
                     self._log(f"[{idx+1}] ✅ {name}{badge_str} → \"{msg}\"", "success")
+                    self.after(0, lambda: self._save_cfg(silent=True))
                 else:
                     self._log(
                         f"[{idx+1}] ❌ HTTP {r.status_code} — {name}{badge_str}: \"{msg}\"",
@@ -273,8 +276,10 @@ class App(ctk.CTk):
         threading.Thread(target=post, daemon=True).start()
 
     # ── Config ────────────────────────────────────────────────────────────────
-    def _save_cfg(self):
-        users = [{"name": r["name"].get().strip(), "is_mod": r["mod"].get()}
+    def _save_cfg(self, silent: bool = False):
+        users = [{"name": r["name"].get().strip(),
+                  "msg":  r["msg"].get().strip(),
+                  "is_mod": r["mod"].get()}
                  for r in self._user_rows]
         cfg = {
             "target_url": self.entry_url.get().strip(),
@@ -282,7 +287,8 @@ class App(ctk.CTk):
             "users":      users,
         }
         save_test_config(cfg)
-        self._log("💾 Konfigurace uložena do bot_test_config.json", "info")
+        if not silent:
+            self._log("💾 Konfigurace uložena do bot_test_config.json", "info")
 
     # ── Log ───────────────────────────────────────────────────────────────────
     def _log(self, msg: str, level: str = "info"):
