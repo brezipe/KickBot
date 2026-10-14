@@ -32,14 +32,16 @@ jobs:
       - name: Sestavení exe
         shell: pwsh
         run: |
-          Remove-Item dist\*.exe -ErrorAction SilentlyContinue
           python build_exe.py
-          Get-ChildItem dist\*.exe
+          # jen právě sestavené exe (starší v dist/ zůstávají beze změny)
+          $new = Get-ChildItem dist\*.exe | Sort-Object LastWriteTime | Select-Object -Last 1
+          "NEW_EXE=dist/$($new.Name)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $new
 
       - uses: actions/upload-artifact@v4
         with:
           name: KickBot-exe
-          path: dist/*.exe
+          path: ${{ env.NEW_EXE }}
           if-no-files-found: error
           retention-days: 30
 
@@ -48,6 +50,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
-          git add -f dist/*.exe kick_bot_gui.py
+          git add -f "$env:NEW_EXE" kick_bot_gui.py
           git commit -m "Build exe $(Get-Date -Format 'yyMMdd_HHmm') [skip ci]"
           git push
