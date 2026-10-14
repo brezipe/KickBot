@@ -4,7 +4,7 @@ Instalace: pip install customtkinter websocket-client curl_cffi requests
 Spuštění:  python kick_bot_gui.py
 """
 
-import os, sys, json, re, time, hashlib, base64, secrets, webbrowser, threading
+import os, sys, json, re, time, hashlib, base64, secrets, webbrowser, threading, uuid
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlencode, urlparse, parse_qs
 from pathlib import Path
@@ -24,8 +24,12 @@ KICK_AUTH_URL   = "https://id.kick.com/oauth/authorize"
 KICK_TOKEN_URL  = "https://id.kick.com/oauth/token"
 KICK_API_URL    = "https://api.kick.com/public/v1"
 KICK_SCOPES     = "user:read chat:write"
-PUSHER_WS       = ("wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
-                   "?protocol=7&client=js&version=8.4.0-rc2&flash=false")
+# Chat Kicku běží od 10/2026 přes Centrifugo (dřív Pusher — starý klíč už neplatí).
+# Token hosta z web.kick.com, websocket jen s Origin kick.com (jinak 403).
+KICK_RT_AUTH_URL = "https://web.kick.com/api/v1/realtime/auth/connection"
+KICK_RT_WS_URLS  = ["wss://realtime.us-west-2.platform.kick.com/connection/websocket",
+                    "wss://realtime.us-east-1.platform.kick.com/connection/websocket"]
+KICK_ORIGIN      = "https://kick.com"
 REDIRECT_URI    = "http://localhost:7878/callback"
 TOKEN_FILE      = Path("kick_tokens.json")
 CONFIG_FILE     = Path("kick_config.json")
@@ -206,6 +210,14 @@ class BotEngine:
         self.ws             = None
         self.ws_thread      = None
         self.running        = False
+        # chat přes Centrifugo
+        self.rt_client_id    = ""
+        self._rt_id          = 0
+        self._refresh_timer  = None
+        self._want_connected = False
+        self._first_connect  = True
+        self._on_connected   = lambda ok: None
+        self._creds          = ("", "")
 
         self.tokens = {"access_token": "", "refresh_token": "", "expires_at": 0}
         self._load_tokens()
@@ -572,59 +584,162 @@ class BotEngine:
         self.result_cb(correct, sorted_results)
 
     # ── WebSocket ─────────────────────────────────────────────────────────────
+    # ── Chat přes Centrifugo ──────────────────────────────────────────────────
+    def _rt_token(self):
+        """Token hosta pro realtime (Centrifugo). Platí ~45 min, pak se obnovuje."""
+        r = cf_requests.post(KICK_RT_AUTH_URL, impersonate="chrome124", timeout=15,
+                             headers={"Origin": KICK_ORIGIN, "Referer": KICK_ORIGIN + "/",
+                                      "Content-Type": "application/json"},
+                             data=json.dumps({"client_id": self.rt_client_id}))
+        r.raise_for_status()
+        return r.json()["data"]["token"]
+
+    def _rt_send(self, payload):
+        self._rt_id += 1
+        payload["id"] = self._rt_id
+        self.ws.send(json.dumps(payload))
+
+    def _schedule_refresh(self, ttl):
+        """Obnoví token minutu před vypršením (Centrifugo jinak spojení ukončí)."""
+        if self._refresh_timer:
+            self._refresh_timer.cancel()
+        if not ttl:
+            return
+        def refresh():
+            try:
+                self._rt_send({"refresh": {"token": self._rt_token()}})
+                if DEBUG:
+                    self.log("[DEBUG] Token chatu obnoven", "info")
+            except Exception as e:
+                self.log(f"Obnova tokenu chatu selhala: {e}", "warn")
+        self._refresh_timer = threading.Timer(max(ttl - 60, 30), refresh)
+        self._refresh_timer.daemon = True
+        self._refresh_timer.start()
+
     def connect(self, slug, client_id, client_secret, on_connected):
         bid, cid = self.get_channel_info(slug)
         if not bid:
             on_connected(False); return
         self.broadcaster_id = bid
         self.chatroom_id    = cid
+        self.rt_client_id   = str(uuid.uuid4())
+        self._want_connected = True
+        self._first_connect  = True
+        self._on_connected   = on_connected
+        self._creds          = (client_id, client_secret)
         if DEBUG:
             self.log(f"[DEBUG] broadcaster_id={bid}  chatroom_id={cid}", "info")
+        self._open_socket(0)
+
+    def _open_socket(self, url_idx):
+        client_id, client_secret = self._creds
+        cid = self.chatroom_id
+        try:
+            token = self._rt_token()
+        except Exception as e:
+            self.log(f"Nelze získat token chatu: {e}", "error")
+            self._retry_later(url_idx)
+            return
+        self._rt_id = 0
+        url = KICK_RT_WS_URLS[url_idx % len(KICK_RT_WS_URLS)]
 
         def on_open(ws):
-            ws.send(json.dumps({"event": "pusher:subscribe",
-                                "data": {"auth": "", "channel": f"chatrooms.{cid}.v2"}}))
-            self.log("✅ Připojeno k chatu!", "success")
-            self.running = True
-            self.status_cb("idle")
-            # Ověř token a zjisti bot user ID
-            self.get_my_user_id()
-            self.send_chat(self._msg("bot_online"), client_id, client_secret)
-            on_connected(True)
+            self._rt_send({"connect": {"token": token, "name": "js"}})
+
+        def handle(frame):
+            if frame.get("connect") is not None and "error" not in frame:
+                self._schedule_refresh(frame["connect"].get("ttl"))
+                self._rt_send({"subscribe": {"channel": f"chatrooms.{cid}.v2", "flag": 1}})
+                return
+            if "error" in frame:
+                self.log(f"Chat (Centrifugo) chyba: {frame['error']}", "error")
+                return
+            if frame.get("subscribe") is not None:
+                self.running = True
+                self.status_cb("idle")
+                if self._first_connect:
+                    self._first_connect = False
+                    self.log("✅ Připojeno k chatu!", "success")
+                    self.get_my_user_id()
+                    self.send_chat(self._msg("bot_online"), client_id, client_secret)
+                    self._on_connected(True)
+                else:
+                    self.log("✅ Znovu připojeno k chatu.", "success")
+                return
+            if frame.get("refresh") is not None:
+                self._schedule_refresh(frame["refresh"].get("ttl"))
+                return
+            pub = (frame.get("push") or {}).get("pub")
+            if not pub:
+                return
+            data = pub.get("data") or {}
+            if data.get("event") != "App\\Events\\ChatMessageEvent":
+                return
+            rd = data.get("data", "{}")
+            d  = json.loads(rd) if isinstance(rd, str) else rd
+            sender, content = d.get("sender", {}), d.get("content", "")
+            if sender and content:
+                self.handle_message(sender, content, client_id, client_secret)
 
         def on_msg(ws, raw):
-            try:
-                outer = json.loads(raw)
-            except Exception:
-                return
-            if outer.get("event") == "pusher:ping":
-                ws.send(json.dumps({"event": "pusher:pong", "data": {}}))
-                return
-            if outer.get("event") != "App\\Events\\ChatMessageEvent":
-                return
-            rd = outer.get("data", "{}")
-            d  = json.loads(rd) if isinstance(rd, str) else rd
-            s, c = d.get("sender", {}), d.get("content", "")
-            if s and c:
-                self.handle_message(s, c, client_id, client_secret)
+            # Centrifugo může poslat víc zpráv v jednom rámci (oddělené novým řádkem).
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if line == "{}":            # ping serveru (každých 25 s) → pong
+                    ws.send("{}")
+                    continue
+                try:
+                    frame = json.loads(line)
+                except Exception:
+                    continue
+                try:
+                    handle(frame)
+                except Exception as e:
+                    self.log(f"Chyba zpracování zprávy: {e}", "error")
 
         def on_err(ws, err):
             self.log(f"WS chyba: {err}", "error")
 
         def on_close(ws, code, msg):
             self.running = False
-            self.log("Odpojeno od chatu.", "warn")
-            self.status_cb("disconnected")
+            if self._refresh_timer:
+                self._refresh_timer.cancel()
+            if self._want_connected:
+                self.log(f"Spojení s chatem přerušeno ({code}), zkouším znovu…", "warn")
+                self.status_cb("disconnected")
+                self._retry_later(url_idx + 1)
+            else:
+                self.log("Odpojeno od chatu.", "warn")
+                self.status_cb("disconnected")
 
-        self.ws = websocket.WebSocketApp(PUSHER_WS,
+        self.ws = websocket.WebSocketApp(url, header={"User-Agent": "Mozilla/5.0"},
             on_open=on_open, on_message=on_msg,
             on_error=on_err, on_close=on_close)
         self.ws_thread = threading.Thread(
-            target=lambda: self.ws.run_forever(ping_interval=30, ping_timeout=10),
+            target=lambda: self.ws.run_forever(origin=KICK_ORIGIN, ping_interval=0),
             daemon=True)
         self.ws_thread.start()
 
+    def _retry_later(self, url_idx, delay=5):
+        if not self._want_connected:
+            if self._first_connect:
+                self._on_connected(False)
+            return
+        if self._first_connect and url_idx >= len(KICK_RT_WS_URLS):
+            # první připojení se nepovedlo na žádný server → ohlásit chybu, nezkoušet donekonečna
+            self._want_connected = False
+            self._on_connected(False)
+            return
+        t = threading.Timer(delay, lambda: self._open_socket(url_idx))
+        t.daemon = True
+        t.start()
+
     def disconnect(self):
+        self._want_connected = False
+        if self._refresh_timer:
+            self._refresh_timer.cancel()
         if self.ws:
             self.ws.close()
         self.running = False

@@ -1,0 +1,41 @@
+# Sestaví KickBot .exe na Windows (PyInstaller přes build_exe.py) a dá ho ke stažení
+# v záložce Actions → běh → Artifacts. Spouští se při pushi nebo ručně (Run workflow).
+name: Build exe
+
+on:
+  push:
+    paths:
+      - "kick_bot_gui.py"
+      - "build_exe.py"
+      - "requirements.txt"
+      - ".github/workflows/build-exe.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalace závislostí
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Sestavení exe
+        shell: pwsh
+        run: |
+          Remove-Item dist\*.exe -ErrorAction SilentlyContinue
+          python build_exe.py
+          Get-ChildItem dist\*.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KickBot-exe
+          path: dist/*.exe
+          if-no-files-found: error
+          retention-days: 30
