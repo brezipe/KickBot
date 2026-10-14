@@ -11,6 +11,9 @@ on:
       - ".github/workflows/build-exe.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write   # hotové exe se uloží do dist/ ve stejné větvi
+
 jobs:
   build:
     runs-on: windows-latest
@@ -39,3 +42,12 @@ jobs:
           path: dist/*.exe
           if-no-files-found: error
           retention-days: 30
+
+      - name: Uložení exe do dist/ (commit do stejné větve)
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add -f dist/*.exe kick_bot_gui.py
+          git commit -m "Build exe $(Get-Date -Format 'yyMMdd_HHmm') [skip ci]"
+          git push
