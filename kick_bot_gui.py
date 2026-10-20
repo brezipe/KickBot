@@ -18,7 +18,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "261014.2014"
+BUILD_VERSION = "261020.2310"
 
 DEBUG = False
 
@@ -85,8 +85,10 @@ DEFAULT_BOT_CONFIG = {
         "counter_prazdno": "❌ V chatu zatím nikdo nic nenapsal.",
     },
     "counter": {
-        "top_n":   3,
-        "delay_s": 5,
+        "top_n":       3,
+        "delay_s":     5,
+        "burst":       2,
+        "duplicity_s": 60,
     },
     "debug": {
         "enabled":          False,
@@ -131,10 +133,15 @@ BOT_CONFIG_TEMPLATE = {
     },
     "counter": {
         "_vysvetleni": "KickCounter — počítá zprávy od spuštění bota. top_n = kolik nejaktivnějších "
-                       "diváků se pošle do chatu; delay_s = od jednoho diváka se započítá max. 1 zpráva "
-                       "za tolik sekund (0 = počítat každou zprávu).",
-        "top_n":   3,
-        "delay_s": 5,
+                       "diváků se pošle do chatu; delay_s + burst = každý divák má zásobník 'burst' "
+                       "zpráv, který se doplňuje o 1 zprávu za delay_s sekund (burst 2 = občas 2 zprávy "
+                       "rychle za sebou projdou, trvalý spam max. 1 zpráva za delay_s; burst 1 = přísně "
+                       "1 za delay_s; delay_s 0 = počítat každou zprávu); duplicity_s = stejná zpráva "
+                       "zopakovaná do tolika sekund se nepočítá (0 = vypnuto).",
+        "top_n":       3,
+        "delay_s":     5,
+        "burst":       2,
+        "duplicity_s": 60,
     },
     "_napoveda_promennych": {
         "popis": "Tyto proměnné musí zůstat v příslušných zprávách:",
@@ -231,7 +238,8 @@ class BotEngine:
         self.guesses        = {}
         # KickCounter — zprávy od spuštění bota
         self.msg_counts         = {}   # username -> počet započítaných zpráv
-        self._last_counted      = {}   # username -> čas poslední započítané zprávy
+        self._buckets           = {}   # username -> [kredity, čas posledního doplnění]
+        self._last_text         = {}   # username -> (text poslední zprávy, čas)
         self.counter_started_at = None
         self.my_user_id         = None
         self.broadcaster_id = 0
@@ -500,22 +508,40 @@ class BotEngine:
 
     def reset_counter(self):
         self.msg_counts         = {}
-        self._last_counted      = {}
+        self._buckets           = {}
+        self._last_text         = {}
         self.counter_started_at = time.time()
         self.counts_cb([])
 
-    def count_message(self, sender):
-        """Započítá zprávu diváka — max. 1 zpráva za delay_s sekund od jednoho diváka."""
+    def count_message(self, sender, content=""):
+        """Započítá zprávu diváka. Každý divák má zásobník `burst` kreditů, který se doplňuje
+        rychlostí 1 kredit za `delay_s` sekund — občas 2 zprávy rychle za sebou projdou,
+        trvalý spam je ale omezen na 1 zprávu za delay_s. Stejná zpráva zopakovaná do
+        `duplicity_s` sekund se nepočítá."""
         if self.counter_started_at is None:
             return
         if self.my_user_id and str(sender.get("id")) == str(self.my_user_id):
             return   # vlastní zprávy bota nepočítat
         username = sender.get("username", "???")
-        now   = time.time()
-        last  = self._last_counted.get(username)
-        if last is not None and now - last < self._counter_setting("delay_s", 5.0):
+        now = time.time()
+
+        text = " ".join(content.lower().split())
+        dup_window = self._counter_setting("duplicity_s", 60.0)
+        prev = self._last_text.get(username)
+        self._last_text[username] = (text, now)
+        if dup_window and prev and prev[0] == text and now - prev[1] < dup_window:
             return
-        self._last_counted[username] = now
+
+        delay = self._counter_setting("delay_s", 5.0)
+        if delay:
+            burst = max(1, self._counter_setting("burst", 2))
+            credits, last = self._buckets.get(username, (burst, now))
+            credits = min(burst, credits + (now - last) / delay)
+            if credits < 1:
+                self._buckets[username] = (credits, now)
+                return
+            self._buckets[username] = (credits - 1, now)
+
         self.msg_counts[username] = self.msg_counts.get(username, 0) + 1
         self.counts_cb(self.sorted_counts())
 
@@ -532,7 +558,7 @@ class BotEngine:
         self.send_chat(self._msg("counter_top", seznam=seznam), client_id, client_secret)
 
     def handle_message(self, sender, content, client_id, client_secret):
-        self.count_message(sender)
+        self.count_message(sender, content)
         text  = content.strip()
         lower = text.lower()
 
@@ -1277,10 +1303,18 @@ class App(ctk.CTk):
     def _refresh_counter_cfg_label(self):
         e = self.engine
         n, delay = e._counter_setting("top_n", 3), e._counter_setting("delay_s", 5.0)
-        delay_txt = (f"Od diváka se započítá max. 1 zpráva za {delay:g} s."
-                     if delay else "Počítá se každá zpráva (delay_s = 0).")
+        burst, dup = max(1, e._counter_setting("burst", 2)), e._counter_setting("duplicity_s", 60.0)
+        if not delay:
+            delay_txt = "Počítá se každá zpráva (delay_s = 0)."
+        elif burst == 1:
+            delay_txt = f"Od diváka se započítá max. 1 zpráva za {delay:g} s."
+        else:
+            delay_txt = (f"Od diváka se započítá max. 1 zpráva za {delay:g} s, "
+                         f"občas až {burst} rychle za sebou.")
+        dup_txt = (f"Stejná zpráva do {dup:g} s se nepočítá." if dup
+                   else "Opakované zprávy se počítají.")
         self.lbl_counter_cfg.configure(
-            text=f"Do chatu se pošle Top {n}.\n{delay_txt}\n\n"
+            text=f"Do chatu se pošle Top {n}.\n{delay_txt}\n{dup_txt}\n\n"
                  "Změníš v ✏️ Upravit texty a příkazy\n(sekce counter, zprávy counter_*).")
 
     def _build_log(self, parent):

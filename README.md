@@ -13,8 +13,12 @@ Aplikace má v záhlaví dvě záložky:
 Nastavení počítadla je ve stejném `bot_config.json` (✏️ Upravit texty a příkazy):
 
 - `counter.top_n`: kolik nejaktivnějších poslat do chatu (výchozí 3),
-- `counter.delay_s`: od jednoho diváka se započítá max. 1 zpráva za tolik sekund
-  (výchozí 5, `0` = každá zpráva),
+- `counter.delay_s` + `counter.burst`: každý divák má zásobník `burst` zpráv (výchozí 2),
+  který se doplňuje o 1 zprávu za `delay_s` sekund (výchozí 5). Občas 2 zprávy rychle za sebou
+  projdou, trvalý spam je omezen na 1 zprávu za 5 s. `burst` 1 znamená přísně 1 za 5 s,
+  `delay_s` 0 znamená počítat každou zprávu.
+- `counter.duplicity_s`: stejná zpráva zopakovaná do tolika sekund se nepočítá
+  (výchozí 60, `0` = vypnuto),
 - `zpravy.counter_top` (`{seznam}` = `🥇 user [počet] | 🥈 …`) a `zpravy.counter_prazdno`.
 
 python3 -m venv venv
