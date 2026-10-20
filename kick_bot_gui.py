@@ -18,7 +18,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "261020.2310"
+BUILD_VERSION = "261020.2333"
 
 DEBUG = False
 
@@ -50,8 +50,8 @@ TEXT_BRIGHT = "#f0f0f0"
 RED_ERR     = "#ff4444"
 YELLOW_WARN = "#ffcc00"
 
-TAB_TIP     = "🎯  KickTip"
-TAB_COUNTER = "💬  KickCounter"
+TAB_TIP     = "Tipovačka"
+TAB_COUNTER = "Počet zpráv"
 MAX_COUNT_ROWS = 200   # víc řádků v KickCounteru nevykreslovat (rušný chat)
 
 ctk.set_appearance_mode("dark")
@@ -1053,6 +1053,7 @@ class App(ctk.CTk):
 
         self.tabs = ctk.CTkSegmentedButton(content, values=[TAB_TIP, TAB_COUNTER],
             command=self._show_tab, height=36, font=ctk.CTkFont("", 13, "bold"),
+            width=320, dynamic_resizing=False,   # pevná šířka záložek → text má místo po stranách
             fg_color=CARD_BG, selected_color="#2a4f2a", selected_hover_color="#356335",
             unselected_color=CARD_BG, unselected_hover_color=BORDER, text_color=TEXT_BRIGHT)
         self.tabs.grid(row=0, column=0, padx=20, pady=(16, 0), sticky="w")
@@ -1767,7 +1768,42 @@ class App(ctk.CTk):
         self.destroy()
 
 
+def ensure_single_instance() -> bool:
+    """Povolí jen jednu běžící instanci (Windows: pojmenovaný mutex).
+    Druhé spuštění ukáže hlášku, přepne na už otevřené okno a vrátí False."""
+    if sys.platform != "win32":
+        return True
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    u32 = ctypes.windll.user32
+    k32.CreateMutexW.restype = wintypes.HANDLE
+    global _instance_mutex   # držet referenci po celou dobu běhu, jinak se mutex uvolní
+    _instance_mutex = k32.CreateMutexW(None, False, "Local\\KickTip_single_instance")
+    if ctypes.get_last_error() != 183:   # ERROR_ALREADY_EXISTS
+        return True
+
+    found = []
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def enum_cb(hwnd, _):
+        buf = ctypes.create_unicode_buffer(256)
+        u32.GetWindowTextW(hwnd, buf, 256)
+        if buf.value.startswith("KickTip v") and u32.IsWindowVisible(hwnd):
+            found.append(hwnd)
+            return False
+        return True
+    u32.EnumWindows(enum_cb, 0)
+
+    u32.MessageBoxW(None, "KickTip už běží — přepínám na otevřené okno.", "KickTip", 0x40)
+    if found:
+        u32.ShowWindow(found[0], 9)   # SW_RESTORE
+        u32.SetForegroundWindow(found[0])
+    return False
+
+
 if __name__ == "__main__":
+    if not ensure_single_instance():
+        sys.exit(0)
     app = App()
     app.protocol("WM_DELETE_WINDOW", app.on_closing)
     app.mainloop()

@@ -2,11 +2,11 @@
 
 # KickTip
 
-Aplikace má v záhlaví dvě záložky:
+Aplikace (dřív KickBot) má v záhlaví dvě záložky a může běžet jen v jedné instanci:
 
-- **🎯 KickTip** (dřív KickBot) je tipovačka čísla, funguje jako dřív. Tipy sbírá jen mezi
+- **Tipovačka** je tipovačka čísla, funguje jako dřív. Tipy sbírá jen mezi
   *Spustit tipovačku* (nebo `!start`) a *Stop*.
-- **💬 KickCounter** počítá zprávy každého diváka **od spuštění bota**. Tlačítko *Odeslat do chatu*
+- **Počet zpráv** (KickCounter) počítá zprávy každého diváka **od spuštění bota**. Tlačítko *Odeslat do chatu*
   pošle nejaktivnější diváky a *Vynulovat počítadlo* začne počítat znovu.
   Vlastní zprávy bota se nepočítají.
 
