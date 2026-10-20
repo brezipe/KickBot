@@ -18,7 +18,7 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
-BUILD_VERSION = "261020.2333"
+BUILD_VERSION = "261020.2350"
 
 DEBUG = False
 
@@ -90,6 +90,12 @@ DEFAULT_BOT_CONFIG = {
         "burst":       2,
         "duplicity_s": 60,
     },
+    "web_zpravy": {
+        "enabled":    True,
+        "api_url":    "https://mm.nereknu.cz/api/chat/",
+        "klic":       "",
+        "interval_s": 10,
+    },
     "debug": {
         "enabled":          False,
         "test_server_port": 7879,
@@ -143,6 +149,15 @@ BOT_CONFIG_TEMPLATE = {
         "burst":       2,
         "duplicity_s": 60,
     },
+    "web_zpravy": {
+        "_vysvetleni": "Zprávy z webu mm.nereknu.cz (např. nová objednávka v obchodě) — bot se každých "
+                       "interval_s sekund zeptá na čekající zprávy, napíše je do chatu a potvrdí webu, "
+                       "že jsou odeslané. klic = API klíč od webu (Authorization: Bearer).",
+        "enabled":    True,
+        "api_url":    "https://mm.nereknu.cz/api/chat/",
+        "klic":       "",
+        "interval_s": 10,
+    },
     "_napoveda_promennych": {
         "popis": "Tyto proměnné musí zůstat v příslušných zprávách:",
         "bot_online":    "{cmd_start} = text příkazu start",
@@ -193,7 +208,7 @@ def load_bot_config() -> dict:
                     if not k.startswith("_") and isinstance(v, str):
                         cfg[section][k] = v
         # Counter, debug a gui sekce — přijímají bool a int
-        for section in ("counter", "debug", "gui"):
+        for section in ("counter", "web_zpravy", "debug", "gui"):
             if section in user and isinstance(user[section], dict):
                 for k, v in user[section].items():
                     if not k.startswith("_") and k in cfg[section]:
@@ -242,6 +257,10 @@ class BotEngine:
         self._last_text         = {}   # username -> (text poslední zprávy, čas)
         self.counter_started_at = None
         self.my_user_id         = None
+        # zprávy z webu mm.nereknu.cz
+        self._web_gen      = 0       # zvýšení ukončí běžící smyčku
+        self.web_active    = False
+        self._web_sent_ids = set()   # už napsané do chatu (kdyby selhalo potvrzení webu)
         self.broadcaster_id = 0
         self.chatroom_id    = 0
         self.ws             = None
@@ -475,10 +494,11 @@ class BotEngine:
                     self.log(f"[Chat ✓] {resp.status_code} | {resp.text[:200]}", "success")
                 else:
                     self.log(f"[Chat ✓] {message}", "success")
-            else:
-                self.log(f"Chat API chyba: {resp.status_code} | {resp.text}", "error")
+                return True
+            self.log(f"Chat API chyba: {resp.status_code} | {resp.text}", "error")
         except Exception as e:
             self.log(f"Chyba odesílání: {e}", "error")
+        return False
 
     # ── Soutěžní logika ───────────────────────────────────────────────────────
     def is_moderator(self, sender):
@@ -556,6 +576,72 @@ class BotEngine:
             f"{medals[i] if i < 3 else f'{i+1}.'} {u} [{cnt}]" for i, (u, cnt) in enumerate(top))
         self.log(f"━━━ KickCounter — nejaktivnější: {seznam} ━━━", "success")
         self.send_chat(self._msg("counter_top", seznam=seznam), client_id, client_secret)
+
+    # ── Zprávy z webu (mm.nereknu.cz) ─────────────────────────────────────────
+    def start_web_poller(self, client_id, client_secret):
+        """Spustí smyčku, která se ptá webu na čekající zprávy a píše je do chatu."""
+        cfg = self.bcfg.get("web_zpravy", {})
+        if not cfg.get("enabled", True):
+            return
+        if not str(cfg.get("klic", "")).strip():
+            self.log("🌐 Zprávy z webu nejsou zapnuté — chybí klic v bot_config.json (web_zpravy).", "warn")
+            return
+        self._web_gen += 1
+        threading.Thread(target=self._web_loop, args=(self._web_gen, client_id, client_secret),
+                         daemon=True).start()
+
+    def stop_web_poller(self):
+        self._web_gen += 1
+
+    def _web_loop(self, gen, client_id, client_secret):
+        self.web_active      = True
+        self._web_active_gen = gen
+        self.log("🌐 Zprávy z webu zapnuté.", "success")
+        last_error = None
+        try:
+            while gen == self._web_gen and self._want_connected:
+                cfg  = self.bcfg.get("web_zpravy", {})
+                base = str(cfg.get("api_url", "")).rstrip("/") + "/"
+                hdrs = {"Authorization": f"Bearer {str(cfg.get('klic', '')).strip()}"}
+                if self.running and cfg.get("enabled", True):
+                    try:
+                        r = requests.get(base + "pending/", headers=hdrs, timeout=10)
+                        if r.status_code in (401, 403):
+                            raise RuntimeError("web odmítl klíč — zkontroluj klic v bot_config.json (web_zpravy)")
+                        r.raise_for_status()
+                        pending = sorted(r.json().get("messages", []), key=lambda m: m.get("id", 0))
+                        if last_error:
+                            self.log("🌐 Spojení s webem zase funguje.", "success")
+                            last_error = None
+                        for m in pending:
+                            if gen != self._web_gen or not self.running:
+                                break
+                            mid  = m["id"]
+                            text = str(m.get("text", "")).strip()[:500]   # Kick bere max. 500 znaků
+                            if mid not in self._web_sent_ids:
+                                if text and not self.send_chat(text, client_id, client_secret):
+                                    break   # chat nejde → zkusit znovu v dalším kole
+                                self._web_sent_ids.add(mid)
+                                time.sleep(1.5)   # víc zpráv najednou nepsat rychle za sebou
+                            requests.post(f"{base}{mid}/sent/", headers=hdrs,
+                                          timeout=10).raise_for_status()
+                    except Exception as e:
+                        err = str(e)
+                        if err != last_error:   # stejnou chybu nehlásit každé kolo
+                            self.log(f"🌐 Zprávy z webu: {err}", "warn")
+                            last_error = err
+                wait_until = time.time() + max(3, self._web_interval())
+                while time.time() < wait_until and gen == self._web_gen:
+                    time.sleep(0.5)
+        finally:
+            if self._web_active_gen == gen:   # novější smyčka mezitím nenastoupila
+                self.web_active = False
+
+    def _web_interval(self):
+        try:
+            return float(self.bcfg.get("web_zpravy", {}).get("interval_s", 10))
+        except (TypeError, ValueError):
+            return 10.0
 
     def handle_message(self, sender, content, client_id, client_secret):
         self.count_message(sender, content)
@@ -763,6 +849,7 @@ class BotEngine:
                     self.reset_counter()
                     self.log("💬 KickCounter počítá zprávy od teď.", "success")
                     self.send_chat(self._msg("bot_online"), client_id, client_secret)
+                    self.start_web_poller(client_id, client_secret)
                     self._on_connected(True)
                 else:
                     self.log("✅ Znovu připojeno k chatu.", "success")
@@ -839,6 +926,7 @@ class BotEngine:
 
     def disconnect(self):
         self._want_connected = False
+        self.stop_web_poller()
         if self._refresh_timer:
             self._refresh_timer.cancel()
         if self.ws:
@@ -1515,6 +1603,9 @@ class App(ctk.CTk):
         """Znovu načte bot_config.json bez restartu bota."""
         self.engine.reload_bot_config()
         self._refresh_counter_cfg_label()
+        # klíč k webu doplněný za běhu → zapnout zprávy z webu bez restartu bota
+        if self.engine.running and not self.engine.web_active:
+            self.engine.start_web_poller(*self.engine._creds)
 
     def _counter_send(self):
         if not self.engine.broadcaster_id:

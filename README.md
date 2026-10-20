@@ -21,6 +21,19 @@ Nastavení počítadla je ve stejném `bot_config.json` (✏️ Upravit texty a 
   (výchozí 60, `0` = vypnuto),
 - `zpravy.counter_top` (`{seznam}` = `🥇 user [počet] | 🥈 …`) a `zpravy.counter_prazdno`.
 
+## Zprávy z webu (mm.nereknu.cz)
+
+Když běží bot, každých `web_zpravy.interval_s` sekund (výchozí 10) se zeptá webu na čekající
+zprávy (třeba nová objednávka v obchodě), napíše je do chatu a webu potvrdí, že jsou odeslané:
+
+- `GET  {api_url}pending/` → `{"messages": [{"id", "text", "created"}]}`
+- `POST {api_url}<id>/sent/` → `{"ok": true}`
+- hlavička `Authorization: Bearer <klic>`
+
+V `bot_config.json` stačí vyplnit `web_zpravy.klic`. Výchozí `api_url` je `https://mm.nereknu.cz/api/chat/`.
+Když chat nejde, zpráva se zkusí v dalším kole. Když selže jen potvrzení, zpráva se do chatu
+znovu nenapíše.
+
 python3 -m venv venv
 
 Win:
