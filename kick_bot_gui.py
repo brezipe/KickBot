@@ -1,7 +1,10 @@
 """
-Kick.com Soutěžní Bot — GUI verze
+KickTip — Kick.com soutěžní bot (tipovačka) + KickCounter (počítadlo zpráv v chatu)
 Instalace: pip install customtkinter websocket-client curl_cffi requests
 Spuštění:  python kick_bot_gui.py
+
+KickTip sbírá tipy jen mezi Spustit tipovačku a Stop.
+KickCounter počítá zprávy každého diváka od spuštění bota.
 """
 
 import os, sys, json, re, time, hashlib, base64, secrets, webbrowser, threading, uuid
@@ -47,6 +50,10 @@ TEXT_BRIGHT = "#f0f0f0"
 RED_ERR     = "#ff4444"
 YELLOW_WARN = "#ffcc00"
 
+TAB_TIP     = "🎯  KickTip"
+TAB_COUNTER = "💬  KickCounter"
+MAX_COUNT_ROWS = 200   # víc řádků v KickCounteru nevykreslovat (rušný chat)
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
@@ -74,6 +81,12 @@ DEFAULT_BOT_CONFIG = {
         "cislo_obsazeno":  "⛔ @{username} Číslo {cislo} už zadal/a {jiny_hrac} — vyber si jiné!",
         "top3":            "📊 Top 3: {seznam}",
         "top3_presny":     "🎯 Přesný: {vitez} | Další: {dalsi}",
+        "counter_top":     "💬 Nejaktivnější diváci: {seznam}",
+        "counter_prazdno": "❌ V chatu zatím nikdo nic nenapsal.",
+    },
+    "counter": {
+        "top_n":   3,
+        "delay_s": 5,
     },
     "debug": {
         "enabled":          False,
@@ -113,6 +126,15 @@ BOT_CONFIG_TEMPLATE = {
         "cislo_obsazeno":  "⛔ @{username} Číslo {cislo} už zadal/a {jiny_hrac} — vyber si jiné!",
         "top3":            "📊 Top 3: {seznam}",
         "top3_presny":     "🎯 Přesný: {vitez} | Další: {dalsi}",
+        "counter_top":     "💬 Nejaktivnější diváci: {seznam}",
+        "counter_prazdno": "❌ V chatu zatím nikdo nic nenapsal.",
+    },
+    "counter": {
+        "_vysvetleni": "KickCounter — počítá zprávy od spuštění bota. top_n = kolik nejaktivnějších "
+                       "diváků se pošle do chatu; delay_s = od jednoho diváka se započítá max. 1 zpráva "
+                       "za tolik sekund (0 = počítat každou zprávu).",
+        "top_n":   3,
+        "delay_s": 5,
     },
     "_napoveda_promennych": {
         "popis": "Tyto proměnné musí zůstat v příslušných zprávách:",
@@ -124,6 +146,7 @@ BOT_CONFIG_TEMPLATE = {
         "cislo_obsazeno": "{username} = hráč co psal,  {cislo} = obsazené číslo,  {jiny_hrac} = kdo ho zadal dříve",
         "top3":          "{seznam} = automatický seznam Top 3 (🥇 user [číslo] ±rozdíl ...)",
         "top3_presny":   "{vitez} = hráč(i) s přesným tipem,  {dalsi} = 2. a 3. místo",
+        "counter_top":   "{seznam} = automatický seznam nejaktivnějších (🥇 user [počet zpráv] ...)",
     },
     "debug": {
         "_vysvetleni":      "Testovací mód — spustí lokální HTTP server pro kick_bot_test.py.",
@@ -162,8 +185,8 @@ def load_bot_config() -> dict:
                 for k, v in user[section].items():
                     if not k.startswith("_") and isinstance(v, str):
                         cfg[section][k] = v
-        # Debug a gui sekce — přijímají bool a int
-        for section in ("debug", "gui"):
+        # Counter, debug a gui sekce — přijímají bool a int
+        for section in ("counter", "debug", "gui"):
             if section in user and isinstance(user[section], dict):
                 for k, v in user[section].items():
                     if not k.startswith("_") and k in cfg[section]:
@@ -197,14 +220,20 @@ def load_bot_config() -> dict:
 #  Logika bota
 # ════════════════════════════════════════════════════════════════════════════
 class BotEngine:
-    def __init__(self, log_cb, status_cb, guess_cb, result_cb=None):
+    def __init__(self, log_cb, status_cb, guess_cb, result_cb=None, counts_cb=None):
         self.log_cb    = log_cb
         self.status_cb = status_cb
         self.guess_cb  = guess_cb
         self.result_cb = result_cb or (lambda c, r: None)
+        self.counts_cb = counts_cb or (lambda rows: None)
 
         self.collecting     = False
         self.guesses        = {}
+        # KickCounter — zprávy od spuštění bota
+        self.msg_counts         = {}   # username -> počet započítaných zpráv
+        self._last_counted      = {}   # username -> čas poslední započítané zprávy
+        self.counter_started_at = None
+        self.my_user_id         = None
         self.broadcaster_id = 0
         self.chatroom_id    = 0
         self.ws             = None
@@ -459,7 +488,51 @@ class BotEngine:
             return int(text.strip())
         return None
 
+    # ── KickCounter ───────────────────────────────────────────────────────────
+    def _counter_setting(self, key, default):
+        try:
+            return max(0, type(default)(self.bcfg["counter"].get(key, default)))
+        except (TypeError, ValueError):
+            return default
+
+    def sorted_counts(self):
+        return sorted(list(self.msg_counts.items()), key=lambda x: (-x[1], x[0].lower()))
+
+    def reset_counter(self):
+        self.msg_counts         = {}
+        self._last_counted      = {}
+        self.counter_started_at = time.time()
+        self.counts_cb([])
+
+    def count_message(self, sender):
+        """Započítá zprávu diváka — max. 1 zpráva za delay_s sekund od jednoho diváka."""
+        if self.counter_started_at is None:
+            return
+        if self.my_user_id and str(sender.get("id")) == str(self.my_user_id):
+            return   # vlastní zprávy bota nepočítat
+        username = sender.get("username", "???")
+        now   = time.time()
+        last  = self._last_counted.get(username)
+        if last is not None and now - last < self._counter_setting("delay_s", 5.0):
+            return
+        self._last_counted[username] = now
+        self.msg_counts[username] = self.msg_counts.get(username, 0) + 1
+        self.counts_cb(self.sorted_counts())
+
+    def send_counter_top(self, client_id, client_secret):
+        rows = self.sorted_counts()
+        if not rows:
+            self.send_chat(self._msg("counter_prazdno"), client_id, client_secret)
+            return
+        medals = ["🥇", "🥈", "🥉"]
+        top = rows[:max(1, self._counter_setting("top_n", 3))]
+        seznam = " | ".join(
+            f"{medals[i] if i < 3 else f'{i+1}.'} {u} [{cnt}]" for i, (u, cnt) in enumerate(top))
+        self.log(f"━━━ KickCounter — nejaktivnější: {seznam} ━━━", "success")
+        self.send_chat(self._msg("counter_top", seznam=seznam), client_id, client_secret)
+
     def handle_message(self, sender, content, client_id, client_secret):
+        self.count_message(sender)
         text  = content.strip()
         lower = text.lower()
 
@@ -660,7 +733,9 @@ class BotEngine:
                 if self._first_connect:
                     self._first_connect = False
                     self.log("✅ Připojeno k chatu!", "success")
-                    self.get_my_user_id()
+                    self.my_user_id = self.get_my_user_id()
+                    self.reset_counter()
+                    self.log("💬 KickCounter počítá zprávy od teď.", "success")
                     self.send_chat(self._msg("bot_online"), client_id, client_secret)
                     self._on_connected(True)
                 else:
@@ -754,7 +829,7 @@ class BotEngine:
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title(f"Kick Soutěžní Bot v{BUILD_VERSION}")
+        self.title(f"KickTip v{BUILD_VERSION}")
         self.geometry("1200x700")
         self.minsize(1000, 600)
         self.configure(fg_color=DARK_BG)
@@ -765,6 +840,7 @@ class App(ctk.CTk):
             status_cb = self._set_status,
             guess_cb  = self._update_guesses,
             result_cb = self._update_results,
+            counts_cb = self._update_counts,
         )
         if self.engine._token_valid():
             self._token_status = "valid"
@@ -817,6 +893,8 @@ class App(ctk.CTk):
 
             def log_message(self, *a): pass
 
+        if engine.counter_started_at is None:
+            engine.reset_counter()   # simulované zprávy počítat i bez připojení k Kicku
         try:
             srv = HTTPServer(("localhost", port), _Handler)
             threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -937,11 +1015,46 @@ class App(ctk.CTk):
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=0)
         self.grid_columnconfigure(1, weight=1)
-        self.grid_columnconfigure(2, weight=0)
         self.grid_rowconfigure(0, weight=1)
         self._build_sidebar()
-        self._build_main()
-        self._build_right_panel()
+
+        # Obsah vpravo od sidebaru: záložky (KickTip / KickCounter), stránka, protokol
+        content = ctk.CTkFrame(self, fg_color=DARK_BG, corner_radius=0)
+        content.grid(row=0, column=1, sticky="nsew", padx=(1, 0))
+        content.grid_columnconfigure(0, weight=1)
+        content.grid_rowconfigure(1, weight=2)
+        content.grid_rowconfigure(2, weight=1)
+
+        self.tabs = ctk.CTkSegmentedButton(content, values=[TAB_TIP, TAB_COUNTER],
+            command=self._show_tab, height=36, font=ctk.CTkFont("", 13, "bold"),
+            fg_color=CARD_BG, selected_color="#2a4f2a", selected_hover_color="#356335",
+            unselected_color=CARD_BG, unselected_hover_color=BORDER, text_color=TEXT_BRIGHT)
+        self.tabs.grid(row=0, column=0, padx=20, pady=(16, 0), sticky="w")
+
+        self._pages = {}
+        for name in (TAB_TIP, TAB_COUNTER):
+            page = ctk.CTkFrame(content, fg_color="transparent", corner_radius=0)
+            page.grid(row=1, column=0, sticky="nsew")
+            page.grid_columnconfigure(0, weight=1)
+            page.grid_columnconfigure(1, weight=0)
+            page.grid_rowconfigure(0, weight=1)
+            self._pages[name] = page
+
+        self._build_main(self._pages[TAB_TIP])
+        self._build_right_panel(self._pages[TAB_TIP])
+        self._build_counter_main(self._pages[TAB_COUNTER])
+        self._build_counter_panel(self._pages[TAB_COUNTER])
+        self._build_log(content)
+
+        self.tabs.set(TAB_TIP)
+        self._show_tab(TAB_TIP)
+
+    def _show_tab(self, name):
+        for n, page in self._pages.items():
+            if n == name:
+                page.grid()
+            else:
+                page.grid_remove()
 
     def _build_sidebar(self):
         outer = ctk.CTkFrame(self, fg_color=PANEL_BG, corner_radius=0, width=280)
@@ -957,9 +1070,9 @@ class App(ctk.CTk):
         sb.grid_columnconfigure(0, weight=1)
 
         # Logo
-        ctk.CTkLabel(sb, text="🎯 KickBot", font=ctk.CTkFont("", 22, "bold"),
+        ctk.CTkLabel(sb, text="🎯 KickTip", font=ctk.CTkFont("", 22, "bold"),
                      text_color=KICK_GREEN).grid(row=0, column=0, padx=24, pady=(28, 4), sticky="w")
-        ctk.CTkLabel(sb, text="Soutěžní bot", font=ctk.CTkFont("", 12),
+        ctk.CTkLabel(sb, text="Tipovačka + počítadlo chatu", font=ctk.CTkFont("", 12),
                      text_color=TEXT_DIM).grid(row=1, column=0, padx=24, pady=(0, 24), sticky="w")
         ctk.CTkFrame(sb, height=1, fg_color=BORDER).grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 20))
 
@@ -1040,16 +1153,15 @@ class App(ctk.CTk):
             command=lambda: webbrowser.open("https://kick.com/settings/developer")
         ).grid(row=22, column=0, padx=16, pady=(0, 16), sticky="ew")
 
-    def _build_main(self):
-        main = ctk.CTkFrame(self, fg_color=DARK_BG, corner_radius=0)
-        main.grid(row=0, column=1, sticky="nsew", padx=(1, 0))
+    def _build_main(self, parent):
+        main = ctk.CTkFrame(parent, fg_color=DARK_BG, corner_radius=0)
+        main.grid(row=0, column=0, sticky="nsew")
         main.grid_columnconfigure(0, weight=1)
-        main.grid_rowconfigure(1, weight=2)
-        main.grid_rowconfigure(3, weight=1)
+        main.grid_rowconfigure(1, weight=1)
 
         # Banner
         self.banner = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12, height=64)
-        self.banner.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 12))
+        self.banner.grid(row=0, column=0, sticky="ew", padx=20, pady=(12, 12))
         self.banner.grid_propagate(False)
         self.banner.grid_columnconfigure(1, weight=1)
         self.banner_icon = ctk.CTkLabel(self.banner, text="⚪", font=ctk.CTkFont("", 28))
@@ -1086,11 +1198,96 @@ class App(ctk.CTk):
             font=ctk.CTkFont("", 12), text_color=TEXT_DIM, justify="center")
         self.guess_placeholder.grid(row=0, column=0, columnspan=2, pady=30)
 
-        # Log
-        self._log_main      = main
+    def _build_counter_main(self, parent):
+        main = ctk.CTkFrame(parent, fg_color=DARK_BG, corner_radius=0)
+        main.grid(row=0, column=0, sticky="nsew")
+        main.grid_columnconfigure(0, weight=1)
+        main.grid_rowconfigure(1, weight=1)
+
+        banner = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12, height=64)
+        banner.grid(row=0, column=0, sticky="ew", padx=20, pady=(12, 12))
+        banner.grid_propagate(False)
+        banner.grid_columnconfigure(1, weight=1)
+        self.cbanner_icon = ctk.CTkLabel(banner, text="⚪", font=ctk.CTkFont("", 28))
+        self.cbanner_icon.grid(row=0, column=0, padx=(20, 12), pady=12)
+        self.cbanner_text = ctk.CTkLabel(banner, text="Počítadlo neběží",
+            font=ctk.CTkFont("", 16, "bold"), text_color=TEXT_MID, anchor="w")
+        self.cbanner_text.grid(row=0, column=1, sticky="w")
+        self.cbanner_sub = ctk.CTkLabel(banner, text="Počítá se od spuštění bota",
+            font=ctk.CTkFont("", 11), text_color=TEXT_DIM, anchor="e")
+        self.cbanner_sub.grid(row=0, column=2, padx=20, sticky="e")
+
+        cf = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12)
+        cf.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 12))
+        cf.grid_columnconfigure(0, weight=1)
+        cf.grid_rowconfigure(1, weight=1)
+        hdr = ctk.CTkFrame(cf, fg_color="transparent")
+        hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 4))
+        hdr.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(hdr, text="Uživatel – počet zpráv",
+                     font=ctk.CTkFont("", 14, "bold"), text_color=TEXT_BRIGHT
+                     ).grid(row=0, column=0, sticky="w")
+        self.lbl_ccount = ctk.CTkLabel(hdr, text="0 diváků · 0 zpráv",
+                     font=ctk.CTkFont("", 11), text_color=TEXT_DIM)
+        self.lbl_ccount.grid(row=0, column=1, sticky="e")
+        self.count_scroll = ctk.CTkScrollableFrame(cf, fg_color="transparent",
+                                                    scrollbar_button_color=BORDER)
+        self.count_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self.count_scroll.grid_columnconfigure(0, weight=1)
+        self._count_rows = []
+        self._pending_counts   = []
+        self._redraw_scheduled = False
+        self.count_placeholder = ctk.CTkLabel(self.count_scroll,
+            text="Zatím žádné zprávy.\nPočítadlo se spustí spolu s botem.",
+            font=ctk.CTkFont("", 12), text_color=TEXT_DIM, justify="center")
+        self.count_placeholder.grid(row=0, column=0, columnspan=2, pady=30)
+
+    def _build_counter_panel(self, parent):
+        rp = ctk.CTkFrame(parent, fg_color=PANEL_BG, corner_radius=0, width=240)
+        rp.grid(row=0, column=1, sticky="nsew", padx=(1, 0))
+        rp.grid_propagate(False)
+        rp.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(rp, text="💬 Ovládání", font=ctk.CTkFont("", 18, "bold"),
+                     text_color=TEXT_BRIGHT).grid(row=0, column=0, padx=20, pady=(24, 4), sticky="w")
+        ctk.CTkFrame(rp, height=1, fg_color=BORDER).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 16))
+
+        self._section(rp, "NEJAKTIVNĚJŠÍ DIVÁCI", 2)
+        self.btn_counter_send = ctk.CTkButton(rp, text="📣  Odeslat do chatu",
+            fg_color=KICK_GREEN, hover_color="#45d614", text_color="#000",
+            font=ctk.CTkFont("", 13, "bold"), height=44, corner_radius=8,
+            command=self._counter_send)
+        self.btn_counter_send.grid(row=3, column=0, padx=16, pady=(4, 6), sticky="ew")
+
+        self.btn_counter_reset = ctk.CTkButton(rp, text="🔄  Vynulovat počítadlo",
+            fg_color="#2a1a1a", hover_color="#3a2020", text_color="#ff6666",
+            border_color="#ff4444", border_width=1,
+            font=ctk.CTkFont("", 12), height=36, corner_radius=8,
+            command=self._counter_reset)
+        self.btn_counter_reset.grid(row=4, column=0, padx=16, pady=(0, 16), sticky="ew")
+
+        ctk.CTkFrame(rp, height=1, fg_color=BORDER).grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 16))
+
+        self._section(rp, "NASTAVENÍ (bot_config.json)", 6)
+        self.lbl_counter_cfg = ctk.CTkLabel(rp, text="", font=ctk.CTkFont("", 11),
+            text_color=TEXT_MID, justify="left", wraplength=210)
+        self.lbl_counter_cfg.grid(row=7, column=0, padx=16, pady=(0, 16), sticky="w")
+        self._refresh_counter_cfg_label()
+
+    def _refresh_counter_cfg_label(self):
+        e = self.engine
+        n, delay = e._counter_setting("top_n", 3), e._counter_setting("delay_s", 5.0)
+        delay_txt = (f"Od diváka se započítá max. 1 zpráva za {delay:g} s."
+                     if delay else "Počítá se každá zpráva (delay_s = 0).")
+        self.lbl_counter_cfg.configure(
+            text=f"Do chatu se pošle Top {n}.\n{delay_txt}\n\n"
+                 "Změníš v ✏️ Upravit texty a příkazy\n(sekce counter, zprávy counter_*).")
+
+    def _build_log(self, parent):
+        self._log_main      = parent
         self._log_collapsed = False
-        lf = ctk.CTkFrame(main, fg_color=CARD_BG, corner_radius=12)
-        lf.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        lf = ctk.CTkFrame(parent, fg_color=CARD_BG, corner_radius=12)
+        lf.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
         lf.grid_columnconfigure(0, weight=1)
         lf.grid_rowconfigure(1, weight=1)
         self._log_frame = lf
@@ -1114,9 +1311,9 @@ class App(ctk.CTk):
         self.log_box.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.log_box.configure(state="disabled")
 
-    def _build_right_panel(self):
-        rp = ctk.CTkFrame(self, fg_color=PANEL_BG, corner_radius=0, width=240)
-        rp.grid(row=0, column=2, sticky="nsew", padx=(1, 0))
+    def _build_right_panel(self, parent):
+        rp = ctk.CTkFrame(parent, fg_color=PANEL_BG, corner_radius=0, width=240)
+        rp.grid(row=0, column=1, sticky="nsew", padx=(1, 0))
         rp.grid_propagate(False)
         rp.grid_columnconfigure(0, weight=1)
 
@@ -1126,7 +1323,7 @@ class App(ctk.CTk):
 
         self._section(rp, "SOUTĚŽ", 2)
 
-        self.btn_panel_start = ctk.CTkButton(rp, text="▶  Start soutěže",
+        self.btn_panel_start = ctk.CTkButton(rp, text="▶  Spustit tipovačku",
             fg_color=KICK_GREEN, hover_color="#45d614", text_color="#000",
             font=ctk.CTkFont("", 13, "bold"), height=44, corner_radius=8,
             command=self._panel_start)
@@ -1282,6 +1479,25 @@ class App(ctk.CTk):
     def _reload_bot_config(self):
         """Znovu načte bot_config.json bez restartu bota."""
         self.engine.reload_bot_config()
+        self._refresh_counter_cfg_label()
+
+    def _counter_send(self):
+        if not self.engine.broadcaster_id:
+            self._append_log("Bot není připojen.", "error"); return
+        cid = self.entry_cid.get().strip()
+        cs  = self.entry_csecret.get().strip()
+        self.btn_counter_send.configure(state="disabled", text="Odesílám...")
+        def run():
+            self.engine.send_counter_top(cid, cs)
+            self.after(0, lambda: self.btn_counter_send.configure(
+                state="normal", text="📣  Odeslat do chatu"))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _counter_reset(self):
+        if self.engine.counter_started_at is None:
+            self._append_log("Počítadlo neběží — spustí se spolu s botem.", "warn"); return
+        self.engine.reset_counter()
+        self._append_log("💬 KickCounter vynulován, počítám znovu od teď.", "warn")
 
     def _panel_start(self):
         if not self.engine.running:
@@ -1357,7 +1573,67 @@ class App(ctk.CTk):
             dot = {"idle": "🟢 Online", "collecting": "🔴 Sbírám", "stopped": "🟡 Čekám",
                    "done": "🏆 Hotovo", "disconnected": "⚪ Odpojeno"}.get(status, status)
             self.lbl_status.configure(text=dot)
+            self._refresh_counter_banner()
         self.after(0, _update)
+
+    def _refresh_counter_banner(self):
+        started = self.engine.counter_started_at
+        if self.engine.running and started:
+            self.cbanner_icon.configure(text="🟢")
+            self.cbanner_text.configure(text="Počítám zprávy v chatu", text_color=KICK_GREEN)
+            self.cbanner_sub.configure(text=f"od {datetime.fromtimestamp(started):%H:%M:%S}")
+        elif started:
+            self.cbanner_icon.configure(text="⚪")
+            self.cbanner_text.configure(text="Počítadlo zastaveno — výsledek níže", text_color=TEXT_MID)
+            self.cbanner_sub.configure(text=f"od {datetime.fromtimestamp(started):%H:%M:%S}")
+        else:
+            self.cbanner_icon.configure(text="⚪")
+            self.cbanner_text.configure(text="Počítadlo neběží", text_color=TEXT_MID)
+            self.cbanner_sub.configure(text="Počítá se od spuštění bota")
+
+    def _update_counts(self, rows):
+        # Na rušném chatu chodí desítky zpráv za sekundu → překreslovat max. 2× za sekundu.
+        self._pending_counts = rows
+        if self._redraw_scheduled:
+            return
+        self._redraw_scheduled = True
+        self.after(500 if rows else 0, self._redraw_counts)
+
+    def _redraw_counts(self):
+        self._redraw_scheduled = False
+        rows = self._pending_counts
+        self._refresh_counter_banner()
+        for w in self._count_rows:
+            w.destroy()
+        self._count_rows.clear()
+        self.lbl_ccount.configure(text=f"{len(rows)} diváků · {sum(c for _, c in rows)} zpráv")
+        if not rows:
+            self.count_placeholder.grid(row=0, column=0, columnspan=2, pady=30)
+            return
+        self.count_placeholder.grid_remove()
+        medals = ["🥇", "🥈", "🥉"]
+        for i, (user, cnt) in enumerate(rows[:MAX_COUNT_ROWS]):
+            bg = CARD_BG if i % 2 == 0 else PANEL_BG
+            row_f = ctk.CTkFrame(self.count_scroll, fg_color=bg, corner_radius=4, height=28)
+            row_f.grid(row=i, column=0, columnspan=2, sticky="ew", padx=4, pady=1)
+            row_f.grid_columnconfigure(1, weight=1)
+            row_f.grid_propagate(False)
+            ctk.CTkLabel(row_f, text=medals[i] if i < 3 else f"{i+1}.", width=28,
+                         font=ctk.CTkFont("", 11), text_color=TEXT_DIM
+                         ).grid(row=0, column=0, padx=(8, 2), pady=2)
+            ctk.CTkLabel(row_f, text=user, font=ctk.CTkFont("", 11),
+                         text_color=TEXT_BRIGHT, anchor="w"
+                         ).grid(row=0, column=1, padx=4, pady=2, sticky="w")
+            ctk.CTkLabel(row_f, text=str(cnt), font=ctk.CTkFont("", 11, "bold"),
+                         text_color=KICK_GREEN, anchor="e"
+                         ).grid(row=0, column=2, padx=10, pady=2, sticky="e")
+            self._count_rows.append(row_f)
+        if len(rows) > MAX_COUNT_ROWS:
+            more = ctk.CTkLabel(self.count_scroll,
+                text=f"… a dalších {len(rows) - MAX_COUNT_ROWS} diváků",
+                font=ctk.CTkFont("", 11), text_color=TEXT_DIM)
+            more.grid(row=MAX_COUNT_ROWS, column=0, pady=8)
+            self._count_rows.append(more)
 
     def _update_guesses(self, rows):
         def _redraw():
@@ -1422,7 +1698,7 @@ class App(ctk.CTk):
             self._log_frame.grid_rowconfigure(1, weight=1)
             self.log_box.grid()
             self._log_frame.grid_propagate(True)
-            self._log_main.grid_rowconfigure(3, weight=1)
+            self._log_main.grid_rowconfigure(2, weight=1)
             self.btn_clear_log.grid()
             self.btn_log_toggle.configure(text="▼")
             self._log_collapsed = False
@@ -1432,7 +1708,7 @@ class App(ctk.CTk):
             self._log_frame.grid_rowconfigure(1, weight=0)
             self._log_frame.configure(height=46)
             self._log_frame.grid_propagate(False)
-            self._log_main.grid_rowconfigure(3, weight=0)
+            self._log_main.grid_rowconfigure(2, weight=0)
             self.btn_log_toggle.configure(text="▲")
             self._log_collapsed = True
         self._save_log_collapsed_state(self._log_collapsed)

@@ -8,7 +8,7 @@ import sys
 new_version = datetime.datetime.now().strftime("%y%m%d.%H%M")
 print(f"--- Generuji verzi: {new_version} ---")
 
-exe_name = f"KickBot_{new_version.replace('.', '_')}"
+exe_name = f"KickTip_{new_version.replace('.', '_')}"
 
 # 2. Aktualizace BUILD_VERSION v kick_bot_gui.py
 main_script = "kick_bot_gui.py"

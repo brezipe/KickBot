@@ -1,5 +1,22 @@
 ## Vytvořeno pro: [https://ministrmystery.cz](https://ministrmystery.cz)
 
+# KickTip
+
+Aplikace má v záhlaví dvě záložky:
+
+- **🎯 KickTip** (dřív KickBot) je tipovačka čísla, funguje jako dřív. Tipy sbírá jen mezi
+  *Spustit tipovačku* (nebo `!start`) a *Stop*.
+- **💬 KickCounter** počítá zprávy každého diváka **od spuštění bota**. Tlačítko *Odeslat do chatu*
+  pošle nejaktivnější diváky a *Vynulovat počítadlo* začne počítat znovu.
+  Vlastní zprávy bota se nepočítají.
+
+Nastavení počítadla je ve stejném `bot_config.json` (✏️ Upravit texty a příkazy):
+
+- `counter.top_n`: kolik nejaktivnějších poslat do chatu (výchozí 3),
+- `counter.delay_s`: od jednoho diváka se započítá max. 1 zpráva za tolik sekund
+  (výchozí 5, `0` = každá zpráva),
+- `zpravy.counter_top` (`{seznam}` = `🥇 user [počet] | 🥈 …`) a `zpravy.counter_prazdno`.
+
 python3 -m venv venv
 
 Win:
@@ -43,4 +60,4 @@ Zprávy mají stejný tvar jako dřív (`App\\Events\\ChatMessageEvent`). Posíl
 ## Sestavení exe přes GitHub
 
 Při pushi do repozitáře GitHub Actions sestaví exe na Windows (`.github/workflows/build-exe.yml`).
-Stažení: záložka **Actions** → poslední běh **Build exe** → **Artifacts** → `KickBot-exe`.
+Stažení: záložka **Actions** → poslední běh **Build exe** → **Artifacts** → `KickTip-exe`.

@@ -1,4 +1,4 @@
-# Sestaví KickBot .exe na Windows (PyInstaller přes build_exe.py) a dá ho ke stažení
+# Sestaví KickTip .exe na Windows (PyInstaller přes build_exe.py) a dá ho ke stažení
 # v záložce Actions → běh → Artifacts. Spouští se při pushi nebo ručně (Run workflow).
 name: Build exe
 
@@ -40,7 +40,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: KickBot-exe
+          name: KickTip-exe
           path: ${{ env.NEW_EXE }}
           if-no-files-found: error
           retention-days: 30
