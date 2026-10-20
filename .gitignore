@@ -6,3 +6,5 @@ lode/
 claude_notes.txt
 __pycache__/
 .claude/
+dist/
+*.code-workspace
