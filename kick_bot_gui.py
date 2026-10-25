@@ -11,7 +11,7 @@ import os, sys, json, re, time, hashlib, base64, secrets, webbrowser, threading,
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlencode, urlparse, parse_qs
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 import customtkinter as ctk
 import requests
@@ -66,6 +66,7 @@ DEFAULT_BOT_CONFIG = {
         "start":    "!start",
         "stop":     "!stop",
         "cislo":    "!cislo",
+        "statistika": "!statistika",
         # "vysledky": "!vysledky",
     },
     "zpravy": {
@@ -83,6 +84,16 @@ DEFAULT_BOT_CONFIG = {
         "top3_presny":     "🎯 Přesný: {vitez} | Další: {dalsi}",
         "counter_top":     "💬 Nejaktivnější diváci: {seznam}",
         "counter_prazdno": "❌ V chatu zatím nikdo nic nenapsal.",
+        "stat_objednavky": "celkový počet objednávek : {pocet}",
+        "stat_hry":        "z toho her : {pocet}",
+        "stat_hrali":      "které jsme hráli : {cas}",
+        "stat_vydelal":    "nejvíc na tom vydělal : {divak} a to + {body} MMB",
+        "stat_vydelal_nikdo":  "nejvíc na tom vydělal : nikdo",
+        "stat_projebal":   "nejvíc projebal : {divak} a to - {body} MMB",
+        "stat_projebal_nikdo": "nejvíc projebal : nikdo",
+        "stat_gembler":    "největší gembler : {divak} vyzvedl {pocet} objednávek",
+        "stat_gembler_nikdo":  "největší gembler : nikdo",
+        "stat_obrat":      "CELKOVÝ OBRAT ZA STREAM JE : {obrat}",
     },
     "counter": {
         "top_n":       3,
@@ -118,6 +129,7 @@ BOT_CONFIG_TEMPLATE = {
         "start":    "!start",
         "stop":     "!stop",
         "cislo":    "!cislo",
+        "statistika": "!statistika",
         # "vysledky": "!vysledky",
     },
     "zpravy": {
@@ -136,6 +148,16 @@ BOT_CONFIG_TEMPLATE = {
         "top3_presny":     "🎯 Přesný: {vitez} | Další: {dalsi}",
         "counter_top":     "💬 Nejaktivnější diváci: {seznam}",
         "counter_prazdno": "❌ V chatu zatím nikdo nic nenapsal.",
+        "stat_objednavky": "celkový počet objednávek : {pocet}",
+        "stat_hry":        "z toho her : {pocet}",
+        "stat_hrali":      "které jsme hráli : {cas}",
+        "stat_vydelal":    "nejvíc na tom vydělal : {divak} a to + {body} MMB",
+        "stat_vydelal_nikdo":  "nejvíc na tom vydělal : nikdo",
+        "stat_projebal":   "nejvíc projebal : {divak} a to - {body} MMB",
+        "stat_projebal_nikdo": "nejvíc projebal : nikdo",
+        "stat_gembler":    "největší gembler : {divak} vyzvedl {pocet} objednávek",
+        "stat_gembler_nikdo":  "největší gembler : nikdo",
+        "stat_obrat":      "CELKOVÝ OBRAT ZA STREAM JE : {obrat}",
     },
     "counter": {
         "_vysvetleni": "KickCounter — počítá zprávy od spuštění bota. top_n = kolik nejaktivnějších "
@@ -169,6 +191,9 @@ BOT_CONFIG_TEMPLATE = {
         "top3":          "{seznam} = automatický seznam Top 3 (🥇 user [číslo] ±rozdíl ...)",
         "top3_presny":   "{vitez} = hráč(i) s přesným tipem,  {dalsi} = 2. a 3. místo",
         "counter_top":   "{seznam} = automatický seznam nejaktivnějších (🥇 user [počet zpráv] ...)",
+        "stat_*":        "statistika streamu (!statistika / tlačítko) od spuštění bota, data z webu: "
+                         "{pocet} = počet,  {cas} = např. 2h 42min,  {divak} = přezdívka,  {body} = MMB,  "
+                         "{obrat} = změna všech MMB se znaménkem (+100 / -50)",
     },
     "debug": {
         "_vysvetleni":      "Testovací mód — spustí lokální HTTP server pro kick_bot_test.py.",
@@ -256,6 +281,7 @@ class BotEngine:
         self._buckets           = {}   # username -> [kredity, čas posledního doplnění]
         self._last_text         = {}   # username -> (text poslední zprávy, čas)
         self.counter_started_at = None
+        self.stats_started_at   = None   # statistika streamu (objednávky, obrat…) od spuštění bota
         self.my_user_id         = None
         # zprávy z webu mm.nereknu.cz
         self._web_gen      = 0       # zvýšení ukončí běžící smyčku
@@ -577,6 +603,64 @@ class BotEngine:
         self.log(f"━━━ KickCounter — nejaktivnější: {seznam} ━━━", "success")
         self.send_chat(self._msg("counter_top", seznam=seznam), client_id, client_secret)
 
+    # ── Statistika streamu (data z webu, od spuštění bota) ───────────────────
+    def _stats_url(self):
+        """URL statistiky odvozená z web_zpravy.api_url (…/api/chat/ → …/api/stats/)."""
+        url = str(self.bcfg.get("web_zpravy", {}).get("api_url", "")).rstrip("/")
+        if url.endswith("/chat"):
+            url = url[:-len("/chat")]
+        return url + "/stats/"
+
+    def reset_stats(self):
+        self.stats_started_at = time.time()
+
+    def fetch_stats(self):
+        """Stáhne z webu statistiku od spuštění bota. Vrací dict, při chybě vyhodí RuntimeError."""
+        if self.stats_started_at is None:
+            raise RuntimeError("statistika ještě neběží — spustí se po připojení bota")
+        klic = str(self.bcfg.get("web_zpravy", {}).get("klic", "")).strip()
+        if not klic:
+            raise RuntimeError("chybí klic v bot_config.json (web_zpravy)")
+        od = datetime.fromtimestamp(self.stats_started_at, timezone.utc).isoformat()
+        r = requests.get(self._stats_url(), params={"od": od},
+                         headers={"Authorization": f"Bearer {klic}"}, timeout=15)
+        if r.status_code in (401, 403):
+            raise RuntimeError("web odmítl klíč — zkontroluj klic v bot_config.json (web_zpravy)")
+        r.raise_for_status()
+        return r.json()
+
+    def stats_lines(self, d):
+        """Řádky statistiky do chatu podle šablon stat_* v bot_config.json."""
+        lines = [
+            self._msg("stat_objednavky", pocet=d.get("objednavky", 0)),
+            self._msg("stat_hry", pocet=d.get("hry", 0)),
+            self._msg("stat_hrali", cas=d.get("hrali", "0min")),
+        ]
+        for key, who in (("vydelal", "stat_vydelal"), ("projebal", "stat_projebal")):
+            v = d.get(key)
+            lines.append(self._msg(who, divak=v["divak"], body=v["body"]) if v else self._msg(who + "_nikdo"))
+        g = d.get("gembler")
+        lines.append(self._msg("stat_gembler", divak=g["divak"], pocet=g["objednavek"]) if g
+                     else self._msg("stat_gembler_nikdo"))
+        lines.append(self._msg("stat_obrat", obrat=f"{int(d.get('obrat', 0)):+d}"))
+        return lines
+
+    def send_stats(self, client_id, client_secret):
+        """Stáhne statistiku z webu a napíše ji do chatu (každý řádek zvlášť)."""
+        try:
+            lines = self.stats_lines(self.fetch_stats())
+        except Exception as e:
+            self.log(f"📊 Statistika: {e}", "error")
+            return False
+        self.log("━━━ Statistika streamu ━━━", "success")
+        for i, line in enumerate(lines):
+            self.log(f"  {line}", "info")
+            if not self.send_chat(line[:500], client_id, client_secret):
+                return False
+            if i < len(lines) - 1:
+                time.sleep(1.5)   # řádky nepsat rychle za sebou
+        return True
+
     # ── Zprávy z webu (mm.nereknu.cz) ─────────────────────────────────────────
     def start_web_poller(self, client_id, client_secret):
         """Spustí smyčku, která se ptá webu na čekající zprávy a píše je do chatu."""
@@ -676,6 +760,10 @@ class BotEngine:
                     self.send_chat(
                         self._msg("sber_ukoncen", pocet=len(self.guesses)),
                         client_id, client_secret)
+                return
+
+            if lower == self._cmd("statistika"):
+                threading.Thread(target=self.send_stats, args=(client_id, client_secret), daemon=True).start()
                 return
 
             # Příkaz cislo — může být "!cislo254" nebo "!cislo 254"
@@ -848,6 +936,9 @@ class BotEngine:
                     self.my_user_id = self.get_my_user_id()
                     self.reset_counter()
                     self.log("💬 KickCounter počítá zprávy od teď.", "success")
+                    if self.stats_started_at is None:
+                        self.stats_started_at = time.time()
+                        self.log("📊 Statistika streamu se počítá od teď.", "success")
                     self.send_chat(self._msg("bot_online"), client_id, client_secret)
                     self.start_web_poller(client_id, client_secret)
                     self._on_connected(True)
@@ -1383,10 +1474,28 @@ class App(ctk.CTk):
 
         ctk.CTkFrame(rp, height=1, fg_color=BORDER).grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 16))
 
-        self._section(rp, "NASTAVENÍ (bot_config.json)", 6)
+        self._section(rp, "STATISTIKA STREAMU", 6)
+        self.btn_stats_send = ctk.CTkButton(rp, text="📊  Statistika do chatu",
+            fg_color=KICK_GREEN, hover_color="#45d614", text_color="#000",
+            font=ctk.CTkFont("", 13, "bold"), height=44, corner_radius=8,
+            command=self._stats_send)
+        self.btn_stats_send.grid(row=7, column=0, padx=16, pady=(4, 6), sticky="ew")
+        self.btn_stats_reset = ctk.CTkButton(rp, text="🔄  Statistika od teď",
+            fg_color="#2a1a1a", hover_color="#3a2020", text_color="#ff6666",
+            border_color="#ff4444", border_width=1,
+            font=ctk.CTkFont("", 12), height=36, corner_radius=8,
+            command=self._stats_reset)
+        self.btn_stats_reset.grid(row=8, column=0, padx=16, pady=(0, 4), sticky="ew")
+        self.lbl_stats_since = ctk.CTkLabel(rp, text="Počítá se od připojení bota", font=ctk.CTkFont("", 11),
+            text_color=TEXT_DIM, justify="left", wraplength=210)
+        self.lbl_stats_since.grid(row=9, column=0, padx=16, pady=(0, 16), sticky="w")
+
+        ctk.CTkFrame(rp, height=1, fg_color=BORDER).grid(row=10, column=0, sticky="ew", padx=16, pady=(0, 16))
+
+        self._section(rp, "NASTAVENÍ (bot_config.json)", 11)
         self.lbl_counter_cfg = ctk.CTkLabel(rp, text="", font=ctk.CTkFont("", 11),
             text_color=TEXT_MID, justify="left", wraplength=210)
-        self.lbl_counter_cfg.grid(row=7, column=0, padx=16, pady=(0, 16), sticky="w")
+        self.lbl_counter_cfg.grid(row=12, column=0, padx=16, pady=(0, 16), sticky="w")
         self._refresh_counter_cfg_label()
 
     def _refresh_counter_cfg_label(self):
@@ -1618,6 +1727,25 @@ class App(ctk.CTk):
             self.after(0, lambda: self.btn_counter_send.configure(
                 state="normal", text="📣  Odeslat do chatu"))
         threading.Thread(target=run, daemon=True).start()
+
+    def _stats_send(self):
+        if not self.engine.broadcaster_id:
+            self._append_log("Bot není připojen.", "error"); return
+        cid = self.entry_cid.get().strip()
+        cs  = self.entry_csecret.get().strip()
+        self.btn_stats_send.configure(state="disabled", text="Odesílám...")
+        def run():
+            self.engine.send_stats(cid, cs)
+            self.after(0, lambda: self.btn_stats_send.configure(
+                state="normal", text="📊  Statistika do chatu"))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _stats_reset(self):
+        if self.engine.stats_started_at is None:
+            self._append_log("Statistika ještě neběží — spustí se po připojení bota.", "warn"); return
+        self.engine.reset_stats()
+        self.lbl_stats_since.configure(text=f"Počítá se od {time.strftime('%H:%M')}")
+        self._append_log("📊 Statistika streamu se počítá znovu od teď.", "warn")
 
     def _counter_reset(self):
         if self.engine.counter_started_at is None:

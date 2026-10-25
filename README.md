@@ -61,6 +61,32 @@ dist/ Tady je exe
 
 
 
+## Statistika streamu
+
+Od připojení bota (nebo od tlačítka *Statistika od teď*) se počítá statistika streamu. Tlačítko
+**📊 Statistika do chatu** v záložce *Počet zpráv* nebo příkaz moderátora `!statistika` ji napíše do chatu:
+
+```
+celkový počet objednávek : 15
+z toho her : 13
+které jsme hráli : 2h 42min
+nejvíc na tom vydělal : Metalovec a to + 200 MMB
+nejvíc projebal : pepik_cze a to - 300 MMB
+největší gembler : pepik_cze vyzvedl 9 objednávek
+CELKOVÝ OBRAT ZA STREAM JE : +100
+```
+
+Čísla počítá web: `GET {web}/api/stats/?od=<čas spuštění>` se stejným klíčem jako zprávy z webu
+(`web_zpravy.klic`; adresa se odvodí z `web_zpravy.api_url`, `…/api/chat/` → `…/api/stats/`).
+
+- objednávky = všechny objednávky z obchodu od spuštění (bez zrušených), *z toho her* = sázky s hrou
+  (Kolo štěstí, Piškvorky, Prší, Člověče…),
+- *které jsme hráli* = součet délek odehraných her (od založení zápasu do konce),
+- *vydělal / projebal* = divák s největším přírůstkem / úbytkem MMB od spuštění,
+- *gembler* = divák s nejvíc objednávkami, *obrat* = o kolik se změnil součet všech MMB.
+
+Texty řádků jsou v `bot_config.json` (`zpravy.stat_*`), příkaz v `prikazy.statistika`.
+
 ## Chat přes Centrifugo (od 10/2026)
 
 Kick přestal používat Pusher (starý klíč `32cbd69e4b950bf97679` hlásí „not in this cluster“).
