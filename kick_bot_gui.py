@@ -21,7 +21,7 @@ import websocket
 # Verze aplikace — zvedá se ručně při každé změně, co která verze přinesla je v CHANGELOG.md.
 # BUILD_VERSION (čas sestavení) přepisuje build_exe.py při každém sestavení na GitHubu.
 APP_VERSION = "1.4.0"
-BUILD_VERSION = "261030.0403"
+BUILD_VERSION = "261030.0408"
 
 DEBUG = False
 
