@@ -18,9 +18,21 @@ import requests
 from curl_cffi import requests as cf_requests
 import websocket
 
+# Verze aplikace — zvedá se ručně při každé změně, co která verze přinesla je v CHANGELOG.md.
+# BUILD_VERSION (čas sestavení) přepisuje build_exe.py při každém sestavení na GitHubu.
+APP_VERSION = "1.4.0"
 BUILD_VERSION = "261025.1702"
 
 DEBUG = False
+
+
+def _build_label():
+    """BUILD_VERSION 'RRMMDD.HHMM' → '30. 10. 2026 05:12' (čas sestavení do záhlaví okna)."""
+    try:
+        return datetime.strptime(BUILD_VERSION, "%y%m%d.%H%M").strftime("%-d. %-m. %Y %H:%M"
+                                                                          if os.name != "nt" else "%#d. %#m. %Y %H:%M")
+    except ValueError:
+        return BUILD_VERSION
 
 # ── Kick API konstanty ───────────────────────────────────────────────────────
 KICK_AUTH_URL   = "https://id.kick.com/oauth/authorize"
@@ -67,6 +79,7 @@ DEFAULT_BOT_CONFIG = {
         "stop":     "!stop",
         "cislo":    "!cislo",
         "statistika": "!statistika",
+        "body":     "!b",
         # "vysledky": "!vysledky",
     },
     "zpravy": {
@@ -94,6 +107,8 @@ DEFAULT_BOT_CONFIG = {
         "stat_gembler":    "největší gembler : {divak} vyzvedl {pocet} objednávek",
         "stat_gembler_nikdo":  "největší gembler : nikdo",
         "stat_obrat":      "CELKOVÝ OBRAT ZA STREAM JE : {obrat}",
+        "body":            "💰 @{username} má na webu {body} MMB",
+        "body_nenalezen":  "❓ @{username} v tabulce MMB tě nemám — body dostaneš v soutěžích a tipovačkách na streamu.",
     },
     "counter": {
         "top_n":       3,
@@ -106,6 +121,8 @@ DEFAULT_BOT_CONFIG = {
         "api_url":    "https://mm.nereknu.cz/api/chat/",
         "klic":       "",
         "interval_s": 10,
+        "body_pauza_s":       3,
+        "body_max_za_minutu": 3,
     },
     "debug": {
         "enabled":          False,
@@ -130,6 +147,7 @@ BOT_CONFIG_TEMPLATE = {
         "stop":     "!stop",
         "cislo":    "!cislo",
         "statistika": "!statistika",
+        "body":     "!b",
         # "vysledky": "!vysledky",
     },
     "zpravy": {
@@ -158,6 +176,8 @@ BOT_CONFIG_TEMPLATE = {
         "stat_gembler":    "největší gembler : {divak} vyzvedl {pocet} objednávek",
         "stat_gembler_nikdo":  "největší gembler : nikdo",
         "stat_obrat":      "CELKOVÝ OBRAT ZA STREAM JE : {obrat}",
+        "body":            "💰 @{username} má na webu {body} MMB",
+        "body_nenalezen":  "❓ @{username} v tabulce MMB tě nemám — body dostaneš v soutěžích a tipovačkách na streamu.",
     },
     "counter": {
         "_vysvetleni": "KickCounter — počítá zprávy od spuštění bota. top_n = kolik nejaktivnějších "
@@ -174,11 +194,15 @@ BOT_CONFIG_TEMPLATE = {
     "web_zpravy": {
         "_vysvetleni": "Zprávy z webu mm.nereknu.cz (např. nová objednávka v obchodě) — bot se každých "
                        "interval_s sekund zeptá na čekající zprávy, napíše je do chatu a potvrdí webu, "
-                       "že jsou odeslané. klic = API klíč od webu (Authorization: Bearer).",
+                       "že jsou odeslané. klic = API klíč od webu (Authorization: Bearer). "
+                       "Příkaz !b (prikazy.body) vypíše divákovi jeho MMB z webu — jeden divák smí "
+                       "nejdřív za body_pauza_s sekund a nejvýš body_max_za_minutu× za minutu.",
         "enabled":    True,
         "api_url":    "https://mm.nereknu.cz/api/chat/",
         "klic":       "",
         "interval_s": 10,
+        "body_pauza_s":       3,
+        "body_max_za_minutu": 3,
     },
     "_napoveda_promennych": {
         "popis": "Tyto proměnné musí zůstat v příslušných zprávách:",
@@ -194,6 +218,8 @@ BOT_CONFIG_TEMPLATE = {
         "stat_*":        "statistika streamu (!statistika / tlačítko) od spuštění bota, data z webu: "
                          "{pocet} = počet,  {cas} = např. 2h 42min,  {divak} = přezdívka,  {body} = MMB,  "
                          "{obrat} = změna všech MMB se znaménkem (+100 / -50)",
+        "body":          "{username} = kdo napsal !b,  {body} = kolik má MMB na webu",
+        "body_nenalezen": "{username} = kdo napsal !b (v tabulce MMB není)",
     },
     "debug": {
         "_vysvetleni":      "Testovací mód — spustí lokální HTTP server pro kick_bot_test.py.",
@@ -282,6 +308,7 @@ class BotEngine:
         self._last_text         = {}   # username -> (text poslední zprávy, čas)
         self.counter_started_at = None
         self.stats_started_at   = None   # statistika streamu (objednávky, obrat…) od spuštění bota
+        self._body_asks         = {}     # username -> časy posledních !b (limit pauza / za minutu)
         self.my_user_id         = None
         # zprávy z webu mm.nereknu.cz
         self._web_gen      = 0       # zvýšení ukončí běžící smyčku
@@ -661,6 +688,53 @@ class BotEngine:
                 time.sleep(1.5)   # řádky nepsat rychle za sebou
         return True
 
+    # ── !b — kolik má divák MMB na webu ───────────────────────────────────────
+    def _body_url(self):
+        """URL bodů odvozená z web_zpravy.api_url (…/api/chat/ → …/api/body/)."""
+        url = str(self.bcfg.get("web_zpravy", {}).get("api_url", "")).rstrip("/")
+        if url.endswith("/chat"):
+            url = url[:-len("/chat")]
+        return url + "/body/"
+
+    def _body_allowed(self, username):
+        """Limit pro jednoho diváka: nejdřív za body_pauza_s s a nejvýš body_max_za_minutu× za 60 s."""
+        cfg = self.bcfg.get("web_zpravy", {})
+        try:
+            pauza, za_min = float(cfg.get("body_pauza_s", 3)), int(cfg.get("body_max_za_minutu", 3))
+        except (TypeError, ValueError):
+            pauza, za_min = 3.0, 3
+        now = time.time()
+        asks = [t for t in self._body_asks.get(username, []) if now - t < 60]
+        if (asks and now - asks[-1] < pauza) or (za_min > 0 and len(asks) >= za_min):
+            self._body_asks[username] = asks
+            return False
+        asks.append(now)
+        self._body_asks[username] = asks
+        return True
+
+    def send_body(self, username, client_id, client_secret):
+        """Zeptá se webu, kolik má divák MMB, a odpoví mu v chatu."""
+        klic = str(self.bcfg.get("web_zpravy", {}).get("klic", "")).strip()
+        if not klic:
+            self.log("💰 !b: chybí klic v bot_config.json (web_zpravy)", "error")
+            return
+        try:
+            r = requests.get(self._body_url(), params={"nick": username},
+                             headers={"Authorization": f"Bearer {klic}"}, timeout=10)
+            if r.status_code == 404:
+                msg = self._msg("body_nenalezen", username=username)
+            elif r.status_code in (401, 403):
+                self.log("💰 !b: web odmítl klíč — zkontroluj klic v bot_config.json (web_zpravy)", "error")
+                return
+            else:
+                r.raise_for_status()
+                msg = self._msg("body", username=username, body=r.json().get("body", 0))
+        except Exception as e:
+            self.log(f"💰 !b: web neodpovídá ({e})", "error")
+            return
+        self.log(f"💰 {msg}", "info")
+        self.send_chat(msg[:500], client_id, client_secret)
+
     # ── Zprávy z webu (mm.nereknu.cz) ─────────────────────────────────────────
     def start_web_poller(self, client_id, client_secret):
         """Spustí smyčku, která se ptá webu na čekající zprávy a píše je do chatu."""
@@ -731,6 +805,18 @@ class BotEngine:
         self.count_message(sender, content)
         text  = content.strip()
         lower = text.lower()
+
+        # !b — kolik mám MMB (může každý divák, s limitem proti spamu)
+        if lower == self._cmd("body"):
+            username = sender.get("username", "")
+            if not username:
+                return
+            if self._body_allowed(username):
+                threading.Thread(target=self.send_body, args=(username, client_id, client_secret),
+                                 daemon=True).start()
+            else:
+                self.log(f"  💰 {username}: !b moc často — přeskočeno", "dim")
+            return
 
         if self.is_moderator(sender):
             cmd_start    = self._cmd("start")
@@ -1034,7 +1120,7 @@ class BotEngine:
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title(f"KickTip v{BUILD_VERSION}")
+        self.title(f"KickTip v{APP_VERSION}  (sestaveno {_build_label()})")
         self.geometry("1200x700")
         self.minsize(1000, 600)
         self.configure(fg_color=DARK_BG)

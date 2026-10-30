@@ -8,7 +8,11 @@ import sys
 new_version = datetime.datetime.now().strftime("%y%m%d.%H%M")
 print(f"--- Generuji verzi: {new_version} ---")
 
-exe_name = f"KickTip_{new_version.replace('.', '_')}"
+# Název exe podle verze aplikace (APP_VERSION v kick_bot_gui.py, zvedá se ručně, viz CHANGELOG.md)
+_app = re.search(r'APP_VERSION\s*=\s*"(.*?)"', open("kick_bot_gui.py", encoding="utf-8").read())
+app_version = _app.group(1) if _app else new_version
+exe_name = f"KickTip_v{app_version}"
+print(f"--- Verze aplikace: {app_version} (sestavení {new_version}) ---")
 
 # 2. Aktualizace BUILD_VERSION v kick_bot_gui.py
 main_script = "kick_bot_gui.py"

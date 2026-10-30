@@ -34,6 +34,20 @@ V `bot_config.json` stačí vyplnit `web_zpravy.klic`. Výchozí `api_url` je `h
 Když chat nejde, zpráva se zkusí v dalším kole. Když selže jen potvrzení, zpráva se do chatu
 znovu nenapíše.
 
+## !b — kolik mám MMB
+
+Kdo napíše do chatu `!b`, tomu bot odpoví, kolik má MMB na webu („💰 @nick má na webu 550 MMB“).
+Bere to z webu `GET …/api/body/?nick=<přezdívka z Kicku>` se stejným klíčem `web_zpravy.klic`.
+Jeden divák smí nejdřív za `web_zpravy.body_pauza_s` sekund (výchozí 3) a nejvýš
+`web_zpravy.body_max_za_minutu`× za minutu (výchozí 3). Příkaz je v `prikazy.body`,
+texty v `zpravy.body` a `zpravy.body_nenalezen`.
+
+## Verze
+
+Číslo verze je `APP_VERSION` v `kick_bot_gui.py` a zvedá se ručně s každou změnou. Co která verze přinesla,
+je v [CHANGELOG.md](CHANGELOG.md). Po pushi GitHub sestaví `dist/KickTip_v<verze>.exe` a vytvoří
+Release `v<verze>` s exe ke stažení (záložka Releases). V záhlaví okna je verze a čas sestavení.
+
 python3 -m venv venv
 
 Win:
