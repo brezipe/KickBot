@@ -1,5 +1,6 @@
 # Sestaví KickTip .exe na Windows (PyInstaller přes build_exe.py) a dá ho ke stažení
-# v záložce Actions → běh → Artifacts. Spouští se při pushi nebo ručně (Run workflow).
+# v záložce Actions → běh → Artifacts a jako Release v<verze> (verze = APP_VERSION v kick_bot_gui.py,
+# popis z CHANGELOG.md). Spouští se při pushi nebo ručně (Run workflow).
 name: Build exe
 
 on:
@@ -8,6 +9,7 @@ on:
       - "kick_bot_gui.py"
       - "build_exe.py"
       - "requirements.txt"
+      - "CHANGELOG.md"
       - ".github/workflows/build-exe.yml"
   workflow_dispatch:
 
@@ -50,6 +52,30 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          $ver = (Select-String -Path kick_bot_gui.py -Pattern 'APP_VERSION\s*=\s*"(.*?)"').Matches[0].Groups[1].Value
+          "APP_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           git add -f "$env:NEW_EXE" kick_bot_gui.py
-          git commit -m "Build exe $(Get-Date -Format 'yyMMdd_HHmm') [skip ci]"
+          git commit -m "Build exe v$ver ($(Get-Date -Format 'yyMMdd_HHmm')) [skip ci]"
           git push
+
+      - name: Release v<verze> s exe a popisem z CHANGELOG.md
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ver = $env:APP_VERSION
+          $notes = @(); $in = $false
+          foreach ($l in Get-Content CHANGELOG.md -Encoding utf8) {
+            if ($l -match '^## ') { if ($in) { break }; $in = $l -match ('^## ' + [regex]::Escape($ver) + '(\s|$)'); continue }
+            if ($in) { $notes += $l }
+          }
+          if (-not $notes) { $notes = @("KickTip $ver") }
+          ($notes -join "`n").Trim() | Out-File notes.md -Encoding utf8
+          gh release view "v$ver" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            # stejná verze sestavená znovu — jen vyměnit exe a popis
+            gh release upload "v$ver" "$env:NEW_EXE" --clobber
+            gh release edit "v$ver" --notes-file notes.md
+          } else {
+            gh release create "v$ver" "$env:NEW_EXE" --title "KickTip $ver" --notes-file notes.md --target (git rev-parse HEAD) --latest
+          }
